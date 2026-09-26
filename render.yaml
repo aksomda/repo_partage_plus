@@ -1,0 +1,31 @@
+# Blueprint Render : New → Blueprint → sélectionner ce dépôt.
+# Les valeurs marquées sync: false sont à saisir dans le tableau de bord Render.
+services:
+  - type: web
+    name: repas-partage-api
+    runtime: node
+    plan: free
+    rootDir: server
+    branch: main
+    autoDeploy: true
+    buildCommand: npm ci --omit=dev
+    # Applique le schéma (idempotent) puis démarre l'API.
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: '22'
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL
+        value: 'false'
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JOBS_TOKEN
+        generateValue: true
+      - key: JOBS_INTERVAL_MINUTES
+        value: '15'
+      - key: CORS_ORIGINS
+        sync: false

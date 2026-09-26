@@ -1,0 +1,60 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:repo_partage_plus/core/network/api_config.dart';
+
+/// Jeton lu dans la base locale au démarrage (surchargé dans main()),
+/// pour rester connecté sans réseau.
+final initialTokenProvider = Provider<String?>((ref) => null);
+
+/// Jeton JWT de la session en cours (null si déconnecté).
+class AuthToken extends Notifier<String?> {
+  @override
+  String? build() => ref.read(initialTokenProvider);
+
+  void set(String? token) => state = token;
+}
+
+final authTokenProvider = NotifierProvider<AuthToken, String?>(AuthToken.new);
+
+/// Erreur renvoyée par l'API, avec le message lisible du champ `error`.
+class ApiException implements Exception {
+  ApiException(this.message, {this.statusCode});
+
+  final String message;
+  final int? statusCode;
+
+  factory ApiException.fromDio(DioException error) {
+    final data = error.response?.data;
+    final message = data is Map && data['error'] is String
+        ? data['error'] as String
+        : 'Impossible de joindre le serveur';
+    return ApiException(message, statusCode: error.response?.statusCode);
+  }
+
+  @override
+  String toString() => message;
+}
+
+final dioProvider = Provider<Dio>((ref) {
+  final dio = Dio(
+    BaseOptions(
+      baseUrl: ApiConfig.baseUrl,
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+    ),
+  );
+
+  dio.interceptors.add(
+    InterceptorsWrapper(
+      onRequest: (options, handler) {
+        final token = ref.read(authTokenProvider);
+        if (token != null) options.headers['Authorization'] = 'Bearer $token';
+        handler.next(options);
+      },
+    ),
+  );
+
+  ref.onDispose(dio.close);
+  return dio;
+});
