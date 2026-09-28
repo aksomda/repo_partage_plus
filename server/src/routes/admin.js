@@ -5,6 +5,7 @@ import { pool, query, transaction } from '../db/pool.js';
 import { authenticate, requireRole } from '../http/auth.js';
 import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam, pagination, reason } from '../http/validation.js';
+import { firebase } from '../services/firebase.js';
 import { runScheduledJobs } from '../services/jobs.js';
 import { notify } from '../services/notifications.js';
 import { OFFER_SELECT } from '../services/offers.js';
@@ -113,7 +114,8 @@ adminRouter.patch('/offers/:id/moderation', async (req, res) => {
 
 const userFilters = pagination.extend({
   role: z.enum(['donor', 'beneficiary', 'association', 'admin']).optional(),
-  status: z.enum(['active', 'suspended']).optional(),
+  actor_id: id.optional(),
+  status: z.enum(['pending', 'active', 'suspended']).optional(),
   q: z.string().trim().max(100).optional(),
 });
 
@@ -123,22 +125,29 @@ adminRouter.get('/users', async (req, res) => {
   const params = [];
 
   if (filters.role) {
-    where.push('role = ?');
+    where.push('u.role = ?');
     params.push(filters.role);
   }
+  if (filters.actor_id) {
+    where.push('u.actor_id = ?');
+    params.push(filters.actor_id);
+  }
   if (filters.status) {
-    where.push('status = ?');
+    where.push('u.status = ?');
     params.push(filters.status);
   }
   if (filters.q) {
-    where.push('(name LIKE ? OR email LIKE ?)');
+    where.push('(u.name LIKE ? OR u.email LIKE ?)');
     params.push(`%${filters.q}%`, `%${filters.q}%`);
   }
 
   const rows = await query(
-    `SELECT id, name, email, role, phone, status, status_reason, created_at
-     FROM users WHERE ${where.join(' AND ')}
-     ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    `SELECT u.id, u.name, u.first_name, u.last_name, u.gender, u.age, u.email, u.role,
+       u.actor_id, a.label AS actor_label, u.phone, u.status, u.status_reason,
+       u.email_verified_at, u.created_at
+     FROM users u LEFT JOIN actors a ON a.id = u.actor_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
     [...params, filters.limit, filters.offset],
   );
   res.json(rows);
@@ -147,7 +156,7 @@ adminRouter.get('/users', async (req, res) => {
 const statusSchema = z
   .object({ status: z.enum(['active', 'suspended']), reason })
   .refine((data) => data.status === 'active' || data.reason, {
-    message: 'Motif obligatoire pour une suspension',
+    message: 'Motif obligatoire pour une désactivation',
     path: ['reason'],
   });
 
@@ -165,13 +174,20 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
   );
   if (result.affectedRows === 0) throw notFound('Compte');
 
+  // Désactivé aussi dans Firebase : plus aucune connexion possible.
+  const [{ firebase_uid: firebaseUid }] = await query(
+    'SELECT firebase_uid FROM users WHERE id = ?',
+    [userId],
+  );
+  await firebase.syncDisabled(firebaseUid, data.status === 'suspended');
+
   await notify(pool, userId, {
     type: 'account_status',
-    title: data.status === 'active' ? 'Compte réactivé' : 'Compte suspendu',
+    title: data.status === 'active' ? 'Compte réactivé' : 'Compte désactivé',
     body:
       data.status === 'active'
         ? 'Votre compte est de nouveau actif.'
-        : `Votre compte a été suspendu : ${data.reason}`,
+        : `Votre compte a été désactivé : ${data.reason}`,
   });
 
   const [user] = await query(
@@ -179,6 +195,83 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
     [userId],
   );
   res.json(user);
+});
+
+// ---------- Acteurs (profils proposés à l'inscription) ----------
+
+const actorSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9_-]{2,40}$/, 'Code : lettres minuscules, chiffres, - ou _'),
+    label: z.string().trim().min(2).max(80),
+    description: z.string().trim().max(255).nullable().optional(),
+    icon: z.string().trim().max(50).nullable().optional(),
+    permission_role: z.enum(['donor', 'beneficiary', 'association', 'admin']),
+    self_signup: z.boolean().default(true),
+    active: z.boolean().default(true),
+    sort_order: z.coerce.number().int().min(0).max(999).default(0),
+  })
+  // Personne ne doit pouvoir s'inscrire lui-même administrateur.
+  .refine((data) => data.permission_role !== 'admin' || !data.self_signup, {
+    message: 'Un acteur administrateur ne peut pas être proposé à l’inscription',
+    path: ['self_signup'],
+  });
+
+const ACTOR_SELECT = `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
+  FROM actors a`;
+
+function actorValues(data) {
+  return {
+    code: data.code,
+    label: data.label,
+    description: data.description ?? null,
+    icon: data.icon ?? null,
+    permission_role: data.permission_role,
+    self_signup: data.self_signup,
+    active: data.active,
+    sort_order: data.sort_order,
+  };
+}
+
+adminRouter.get('/actors', async (req, res) => {
+  res.json(await query(`${ACTOR_SELECT} ORDER BY a.sort_order, a.label`));
+});
+
+adminRouter.post('/actors', async (req, res) => {
+  const data = actorSchema.parse(req.body);
+  const result = await query('INSERT INTO actors SET ?', [actorValues(data)]);
+  const [actor] = await query(`${ACTOR_SELECT} WHERE a.id = ?`, [result.insertId]);
+  res.status(201).json(actor);
+});
+
+adminRouter.put('/actors/:id', async (req, res) => {
+  const { id: actorId } = idParam.parse(req.params);
+  const data = actorSchema.parse(req.body);
+
+  const [current] = await query(`${ACTOR_SELECT} WHERE a.id = ?`, [actorId]);
+  if (!current) throw notFound('Acteur');
+  // Changer les droits d'un acteur utilisé changerait ceux de tous ses comptes.
+  if (current.permission_role !== data.permission_role && current.users_count > 0) {
+    throw new HttpError(
+      409,
+      `Droits non modifiables : ${current.users_count} compte(s) utilisent cet acteur`,
+    );
+  }
+
+  await query('UPDATE actors SET ? WHERE id = ?', [actorValues(data), actorId]);
+  const [actor] = await query(`${ACTOR_SELECT} WHERE a.id = ?`, [actorId]);
+  res.json(actor);
+});
+
+adminRouter.delete('/actors/:id', async (req, res) => {
+  const { id: actorId } = idParam.parse(req.params);
+  // Refusé (409) si des comptes l'utilisent : le désactiver à la place.
+  const result = await query('DELETE FROM actors WHERE id = ?', [actorId]);
+  if (result.affectedRows === 0) throw notFound('Acteur');
+  res.status(204).end();
 });
 
 // ---------- Validation des associations ----------

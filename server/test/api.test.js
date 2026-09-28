@@ -13,6 +13,33 @@ const { app } = await import('../src/app.js');
 const { migrate } = await import('../src/db/migrate.js');
 const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
+const { setFirebaseGateway } = await import('../src/services/firebase.js');
+const { sentMails } = await import('../src/services/mailer.js');
+const { HttpError } = await import('../src/http/errors.js');
+
+// Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
+const firebaseCalls = [];
+setFirebaseGateway({
+  async verifyIdToken(idToken) {
+    const [prefix, uid, email] = idToken.split(':');
+    if (prefix !== 'fake') throw new HttpError(401, 'Session Firebase invalide ou expirée');
+    return { uid, email };
+  },
+  async setDisabled(uid, disabled) {
+    firebaseCalls.push(['disabled', uid, disabled]);
+  },
+  async markEmailVerified(uid) {
+    firebaseCalls.push(['verified', uid]);
+  },
+});
+
+const fakeToken = (uid, email) => `fake:${uid}:${email}:${'x'.repeat(20)}`;
+
+/** Dernier code d'activation envoyé à cette adresse. */
+function lastCode(email) {
+  const mail = sentMails.findLast((item) => item.to === email);
+  return mail?.text.match(/\b(\d{6})\b/)?.[1];
+}
 
 const api = request(app);
 const tokens = {};
@@ -67,38 +94,131 @@ describe('santé et référentiels', () => {
 });
 
 describe('authentification', () => {
-  test('inscription puis doublon', async () => {
-    const payload = {
-      name: 'Nouveau Bénéficiaire',
-      email: 'nouveau@test.local',
-      password: 'motdepasse1',
-      role: 'beneficiary',
-    };
-    const created = await api.post('/api/auth/register').send(payload);
-    assert.equal(created.status, 201, created.text);
-    assert.ok(created.body.token);
-    assert.equal(created.body.user.password_hash, undefined);
+  const actors = {};
 
-    const duplicate = await api.post('/api/auth/register').send(payload);
+  before(async () => {
+    const res = await api.get('/api/admin/actors').set(as('admin'));
+    for (const actor of res.body) actors[actor.code] = actor.id;
+  });
+
+  const registration = (overrides = {}) => ({
+    id_token: fakeToken('uid-nouveau', 'nouveau@test.local'),
+    first_name: 'Awa',
+    last_name: 'Traoré',
+    gender: 'female',
+    age: 28,
+    phone: '+226 70 00 00 00',
+    actor_id: actors.particulier,
+    ...overrides,
+  });
+
+  test("les acteurs proposés à l'inscription excluent l'administrateur", async () => {
+    const res = await api.get('/api/actors');
+    assert.equal(res.status, 200);
+    assert.deepEqual(
+      res.body.map((actor) => actor.code).sort(),
+      ['commercant', 'particulier', 'restaurateur'],
+    );
+  });
+
+  test('inscription : compte en attente et code envoyé par e-mail', async () => {
+    const created = await api.post('/api/auth/register').send(registration());
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.body.token, undefined);
+    assert.equal(created.body.user.status, 'pending');
+    assert.equal(created.body.user.role, 'beneficiary');
+    assert.equal(created.body.user.actor_code, 'particulier');
+    assert.equal(created.body.user.name, 'Awa Traoré');
+    assert.equal(created.body.user.password_hash, undefined);
+    assert.match(lastCode('nouveau@test.local'), /^\d{6}$/);
+  });
+
+  test("connexion refusée tant que le compte n'est pas activé", async () => {
+    const res = await api
+      .post('/api/auth/firebase')
+      .send({ id_token: fakeToken('uid-nouveau', 'nouveau@test.local') });
+    assert.equal(res.status, 403);
+    assert.equal(res.body.details.code, 'account_pending');
+  });
+
+  test('renvoi du code trop rapide : 429', async () => {
+    const res = await api.post('/api/auth/resend-code').send({ email: 'nouveau@test.local' });
+    assert.equal(res.status, 429);
+  });
+
+  test('mauvais code : 400, puis activation avec le bon code', async () => {
+    const code = lastCode('nouveau@test.local');
+    const wrong = await api
+      .post('/api/auth/verify-email')
+      .send({ email: 'nouveau@test.local', code: code === '000000' ? '111111' : '000000' });
+    assert.equal(wrong.status, 400);
+    assert.match(wrong.body.error, /4 essai/);
+
+    const ok = await api.post('/api/auth/verify-email').send({ email: 'nouveau@test.local', code });
+    assert.equal(ok.status, 200, ok.text);
+    assert.ok(ok.body.token);
+    assert.equal(ok.body.user.status, 'active');
+    assert.ok(firebaseCalls.some(([kind, uid]) => kind === 'verified' && uid === 'uid-nouveau'));
+
+    const again = await api
+      .post('/api/auth/verify-email')
+      .send({ email: 'nouveau@test.local', code });
+    assert.equal(again.status, 409);
+  });
+
+  test('connexion Firebase une fois le compte activé', async () => {
+    const res = await api
+      .post('/api/auth/firebase')
+      .send({ id_token: fakeToken('uid-nouveau', 'nouveau@test.local') });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.user.email, 'nouveau@test.local');
+  });
+
+  test('jeton Firebase invalide : 401 ; sans profil : 404', async () => {
+    const invalid = await api.post('/api/auth/firebase').send({ id_token: 'x'.repeat(40) });
+    assert.equal(invalid.status, 401);
+
+    const missing = await api
+      .post('/api/auth/firebase')
+      .send({ id_token: fakeToken('uid-inconnu', 'inconnu@test.local') });
+    assert.equal(missing.status, 404);
+    assert.equal(missing.body.details.code, 'profile_missing');
+  });
+
+  test('doublon : 409 ; nouvel essai du même compte en attente limité à 1/min', async () => {
+    const duplicate = await api
+      .post('/api/auth/register')
+      .send(registration({ id_token: fakeToken('uid-autre', 'nouveau@test.local') }));
     assert.equal(duplicate.status, 409);
+
+    const payload = registration({
+      id_token: fakeToken('uid-resto', 'resto@test.local'),
+      actor_id: actors.restaurateur,
+    });
+    const first = await api.post('/api/auth/register').send(payload);
+    assert.equal(first.status, 201, first.text);
+    assert.equal(first.body.user.role, 'donor');
+
+    const retry = await api.post('/api/auth/register').send({ ...payload, first_name: 'Ali' });
+    assert.equal(retry.status, 429);
+  });
+
+  test("impossible de s'inscrire administrateur", async () => {
+    const res = await api.post('/api/auth/register').send(
+      registration({
+        id_token: fakeToken('uid-pirate', 'pirate@test.local'),
+        actor_id: actors.administrateur,
+      }),
+    );
+    assert.equal(res.status, 400);
   });
 
   test('inscription invalide : 400 avec détails', async () => {
     const res = await api
       .post('/api/auth/register')
-      .send({ name: 'X', email: 'pas-un-email', password: '1', role: 'admin' });
+      .send({ id_token: 'court', first_name: 'X', gender: 'autre', age: 5, phone: 'abc' });
     assert.equal(res.status, 400);
-    assert.ok(res.body.details.length >= 3);
-  });
-
-  test('une association doit fournir ses informations', async () => {
-    const res = await api.post('/api/auth/register').send({
-      name: 'Asso sans infos',
-      email: 'asso@test.local',
-      password: 'motdepasse1',
-      role: 'association',
-    });
-    assert.equal(res.status, 400);
+    assert.ok(res.body.details.length >= 5);
   });
 
   test('mauvais mot de passe : 401', async () => {
@@ -113,6 +233,7 @@ describe('authentification', () => {
     const res = await api.get('/api/auth/me').set(as('donor'));
     assert.equal(res.status, 200);
     assert.equal(res.body.role, 'donor');
+    assert.equal(res.body.actor_code, 'commercant');
   });
 });
 
@@ -351,20 +472,93 @@ describe('administration', () => {
     assert.equal(res.body.status, 'approved');
   });
 
-  test('suspension de compte : connexion refusée', async () => {
+  test('désactivation de compte : connexion refusée, Firebase désactivé', async () => {
     const users = await api.get('/api/admin/users?q=nouveau@test.local').set(as('admin'));
     const [user] = users.body;
+    assert.equal(user.actor_label, 'Particulier');
+
+    const noReason = await api
+      .patch(`/api/admin/users/${user.id}/status`)
+      .set(as('admin'))
+      .send({ status: 'suspended' });
+    assert.equal(noReason.status, 400);
 
     const res = await api
       .patch(`/api/admin/users/${user.id}/status`)
       .set(as('admin'))
       .send({ status: 'suspended', reason: 'Test' });
     assert.equal(res.status, 200, res.text);
+    assert.deepEqual(firebaseCalls.at(-1), ['disabled', 'uid-nouveau', true]);
 
     const loginRes = await api
-      .post('/api/auth/login')
-      .send({ email: 'nouveau@test.local', password: 'motdepasse1' });
+      .post('/api/auth/firebase')
+      .send({ id_token: fakeToken('uid-nouveau', 'nouveau@test.local') });
     assert.equal(loginRes.status, 403);
+    assert.equal(loginRes.body.details.code, 'account_suspended');
+
+    const reactivated = await api
+      .patch(`/api/admin/users/${user.id}/status`)
+      .set(as('admin'))
+      .send({ status: 'active' });
+    assert.equal(reactivated.status, 200);
+    assert.deepEqual(firebaseCalls.at(-1), ['disabled', 'uid-nouveau', false]);
+  });
+
+  test('acteurs : création, modification, protections', async () => {
+    const created = await api.post('/api/admin/actors').set(as('admin')).send({
+      code: 'Traiteur',
+      label: 'Traiteur',
+      description: 'Je souhaite publier des produits',
+      icon: 'restaurant_menu',
+      permission_role: 'donor',
+    });
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.body.code, 'traiteur');
+    assert.equal(created.body.users_count, 0);
+    assert.ok((await api.get('/api/actors')).body.some((actor) => actor.code === 'traiteur'));
+
+    const { id: actorId, users_count: _count, created_at: _c, updated_at: _u, ...fields } =
+      created.body;
+    const hidden = await api
+      .put(`/api/admin/actors/${actorId}`)
+      .set(as('admin'))
+      .send({ ...fields, self_signup: true, active: false });
+    assert.equal(hidden.status, 200, hidden.text);
+    assert.ok(!(await api.get('/api/actors')).body.some((actor) => actor.code === 'traiteur'));
+
+    const selfAdmin = await api
+      .post('/api/admin/actors')
+      .set(as('admin'))
+      .send({ code: 'super', label: 'Super', permission_role: 'admin', self_signup: true });
+    assert.equal(selfAdmin.status, 400);
+
+    const duplicate = await api
+      .post('/api/admin/actors')
+      .set(as('admin'))
+      .send({ code: 'traiteur', label: 'Doublon', permission_role: 'donor' });
+    assert.equal(duplicate.status, 409);
+
+    assert.equal((await api.delete(`/api/admin/actors/${actorId}`).set(as('admin'))).status, 204);
+
+    // Un acteur utilisé : ni suppression, ni changement de droits.
+    const actors = await api.get('/api/admin/actors').set(as('admin'));
+    const particulier = actors.body.find((actor) => actor.code === 'particulier');
+    assert.ok(particulier.users_count > 0);
+    assert.equal(
+      (await api.delete(`/api/admin/actors/${particulier.id}`).set(as('admin'))).status,
+      409,
+    );
+    const promote = await api
+      .put(`/api/admin/actors/${particulier.id}`)
+      .set(as('admin'))
+      .send({
+        code: particulier.code,
+        label: particulier.label,
+        permission_role: 'donor',
+        self_signup: true,
+        active: true,
+      });
+    assert.equal(promote.status, 409);
   });
 
   test('catégories et facteurs : CRUD et suppression protégée', async () => {

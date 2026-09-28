@@ -65,6 +65,10 @@ dependencies:
   connectivity_plus: 7.3.1
   uuid: 4.6.0
 
+  # Authentification (mot de passe géré par Firebase, profil dans MySQL)
+  firebase_core: 4.15.0
+  firebase_auth: 6.7.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

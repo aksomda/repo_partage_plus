@@ -7,6 +7,9 @@ abstract final class AppRoutes {
   static const splash = '/';
   static const login = '/login';
   static const register = '/register';
+  static const verifyEmail = '/verify-email';
+  static String verifyEmailFor(String email) =>
+      Uri(path: verifyEmail, queryParameters: {'email': email}).toString();
   static const profile = '/profile';
 
   // Découverte
@@ -41,6 +44,11 @@ abstract final class AppRoutes {
   static const adminAssociations = '/admin/associations';
   static const adminCategories = '/admin/categories';
   static const adminFactors = '/admin/factors';
+  static const adminActors = '/admin/actors';
+
+  /// Écran d'arrivée après connexion, selon les droits du profil.
+  static String homeFor(Object? profile) =>
+      profile is Map && profile['role'] == 'admin' ? adminAccounts : home;
 }
 
 /// Entrée du menu de développement listant tous les écrans.
@@ -56,6 +64,7 @@ final List<RouteMenuEntry> allRouteEntries = [
   const RouteMenuEntry('Démarrage', AppRoutes.splash),
   const RouteMenuEntry('Connexion', AppRoutes.login),
   const RouteMenuEntry('Inscription', AppRoutes.register),
+  const RouteMenuEntry('Activation du compte', AppRoutes.verifyEmail),
   const RouteMenuEntry('Profil', AppRoutes.profile),
   const RouteMenuEntry('Accueil', AppRoutes.home),
   const RouteMenuEntry('Offres à proximité', AppRoutes.nearbyMap),
@@ -78,4 +87,5 @@ final List<RouteMenuEntry> allRouteEntries = [
   ),
   const RouteMenuEntry('Catégories', AppRoutes.adminCategories),
   const RouteMenuEntry('Facteurs', AppRoutes.adminFactors),
+  const RouteMenuEntry('Acteurs', AppRoutes.adminActors),
 ];

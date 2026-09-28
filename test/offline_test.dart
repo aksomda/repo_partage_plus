@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -13,35 +10,6 @@ import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 
 import 'helpers.dart';
-
-/// Faux serveur : chaque requête passe par [handler].
-class FakeServer implements HttpClientAdapter {
-  FakeServer(this.handler);
-
-  Future<ResponseBody> Function(RequestOptions request) handler;
-  final requests = <RequestOptions>[];
-
-  @override
-  Future<ResponseBody> fetch(
-    RequestOptions options,
-    Stream<Uint8List>? requestStream,
-    Future<void>? cancelFuture,
-  ) {
-    requests.add(options);
-    return handler(options);
-  }
-
-  @override
-  void close({bool force = false}) {}
-}
-
-ResponseBody jsonResponse(int status, Object body) => ResponseBody.fromString(
-  jsonEncode(body),
-  status,
-  headers: {
-    Headers.contentTypeHeader: [Headers.jsonContentType],
-  },
-);
 
 Future<ResponseBody> networkDown(RequestOptions request) => throw DioException(
   requestOptions: request,

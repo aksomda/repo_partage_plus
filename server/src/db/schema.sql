@@ -2,21 +2,64 @@
 -- Idempotent : peut être rejoué à chaque déploiement (npm run db:migrate).
 -- Toutes les dates DATETIME sont stockées en UTC.
 
+-- Acteurs proposés à l'inscription (particulier, restaurateur…), configurés
+-- par l'administrateur. `permission_role` fixe les droits dans l'API.
+CREATE TABLE IF NOT EXISTS actors (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(40) NOT NULL,
+  label VARCHAR(80) NOT NULL,
+  description VARCHAR(255) NULL,
+  icon VARCHAR(50) NULL,
+  permission_role ENUM('donor', 'beneficiary', 'association', 'admin') NOT NULL,
+  self_signup TINYINT(1) NOT NULL DEFAULT 1,
+  active TINYINT(1) NOT NULL DEFAULT 1,
+  sort_order SMALLINT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_actors_code (code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Les colonnes ajoutées après la première version sont aussi créées sur les
+-- bases existantes par migrate.js (CREATE TABLE IF NOT EXISTS n'y touche pas).
 CREATE TABLE IF NOT EXISTS users (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
+  first_name VARCHAR(80) NULL,
+  last_name VARCHAR(80) NULL,
+  gender ENUM('male', 'female') NULL,
+  age TINYINT UNSIGNED NULL,
   email VARCHAR(190) NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
+  -- NULL pour les comptes Firebase : le mot de passe est géré par Firebase Auth.
+  password_hash VARCHAR(255) NULL,
+  firebase_uid VARCHAR(128) NULL,
   role ENUM('donor', 'beneficiary', 'association', 'admin') NOT NULL,
+  actor_id INT UNSIGNED NULL,
   phone VARCHAR(30) NULL,
   latitude DECIMAL(9, 6) NULL,
   longitude DECIMAL(9, 6) NULL,
-  status ENUM('active', 'suspended') NOT NULL DEFAULT 'active',
+  -- pending : inscrit, en attente du code reçu par e-mail.
+  status ENUM('pending', 'active', 'suspended') NOT NULL DEFAULT 'active',
   status_reason VARCHAR(255) NULL,
+  email_verified_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_users_email (email),
-  KEY idx_users_role_status (role, status)
+  UNIQUE KEY uq_users_firebase_uid (firebase_uid),
+  KEY idx_users_role_status (role, status),
+  CONSTRAINT fk_users_actor FOREIGN KEY (actor_id) REFERENCES actors (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Codes d'activation envoyés par e-mail après l'inscription (stockés hachés).
+CREATE TABLE IF NOT EXISTS email_otps (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  code_hash CHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  consumed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_email_otps_user (user_id, created_at),
+  CONSTRAINT fk_email_otps_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS associations (

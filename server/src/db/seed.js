@@ -18,13 +18,13 @@ const CATEGORIES = [
 ];
 
 const USERS = [
-  // [nom, email, rôle]
-  ['Admin Démo', 'admin@demo.local', 'admin'],
-  ['Boulangerie du Centre', 'commerce@demo.local', 'donor'],
-  ['Restaurant Le Partage', 'restaurant@demo.local', 'donor'],
-  ['Awa Bénéficiaire', 'beneficiaire@demo.local', 'beneficiary'],
-  ['Solidarité Plus', 'association@demo.local', 'association'],
-  ['Entraide Quartier', 'association2@demo.local', 'association'],
+  // [nom, email, rôle, code de l'acteur]
+  ['Admin Démo', 'admin@demo.local', 'admin', 'administrateur'],
+  ['Boulangerie du Centre', 'commerce@demo.local', 'donor', 'commercant'],
+  ['Restaurant Le Partage', 'restaurant@demo.local', 'donor', 'restaurateur'],
+  ['Awa Bénéficiaire', 'beneficiaire@demo.local', 'beneficiary', 'particulier'],
+  ['Solidarité Plus', 'association@demo.local', 'association', null],
+  ['Entraide Quartier', 'association2@demo.local', 'association', null],
 ];
 
 /** Décale la position de démo d'environ `km` vers le nord-est. */
@@ -38,6 +38,7 @@ async function wipe() {
   await transaction(async (conn) => {
     await conn.query('SET FOREIGN_KEY_CHECKS = 0');
     for (const table of [
+      'email_otps',
       'notifications',
       'reservations',
       'offers',
@@ -81,12 +82,13 @@ export async function seed({ fresh = false } = {}) {
     }
 
     const userIds = {};
-    for (const [name, email, role] of USERS) {
+    for (const [name, email, role, actorCode] of USERS) {
       const [lat, lng] = near(0.5);
       const [result] = await conn.query(
-        `INSERT INTO users (name, email, password_hash, role, phone, latitude, longitude)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [name, email, passwordHash, role, '+22600000000', lat, lng],
+        `INSERT INTO users (name, email, password_hash, role, actor_id, phone, latitude, longitude,
+           email_verified_at)
+         VALUES (?, ?, ?, ?, (SELECT id FROM actors WHERE code = ?), ?, ?, ?, NOW())`,
+        [name, email, passwordHash, role, actorCode, '+22600000000', lat, lng],
       );
       userIds[email] = result.insertId;
     }

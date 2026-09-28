@@ -26,6 +26,23 @@ Vérifier : <http://localhost:3000/health> doit répondre `{"status":"ok"}`.
 | `npm run db:seed -- --fresh` | **Efface toutes les données** puis recrée la démo |
 | `npm test` | Tests de l'API sur une base `repas_partage_test` recréée à chaque fois |
 
+## Authentification
+
+Mot de passe géré par **Firebase Auth**, profil dans MySQL, code d'activation
+envoyé par e-mail par l'API : configuration et schéma dans
+[`docs/FIREBASE.md`](../docs/FIREBASE.md).
+
+| Route | Rôle |
+|---|---|
+| `GET /api/actors` | Acteurs proposés à l'inscription |
+| `POST /api/auth/register` | Profil + jeton Firebase → compte `pending`, code envoyé |
+| `POST /api/auth/verify-email` | E-mail + code → compte actif, renvoie la session |
+| `POST /api/auth/resend-code` | Nouveau code (1 par minute) |
+| `POST /api/auth/firebase` | Jeton Firebase → session (compte actif uniquement) |
+| `POST /api/auth/login` | Mot de passe MySQL : comptes de démo seulement |
+| `GET/POST/PUT/DELETE /api/admin/actors` | Configuration des acteurs |
+| `PATCH /api/admin/users/:id/status` | Désactivation / réactivation (répercutée sur Firebase) |
+
 ## Comptes de démo
 
 Mot de passe commun : `Demo1234!`
@@ -45,7 +62,9 @@ Schéma complet : [`src/db/schema.sql`](src/db/schema.sql).
 
 | Table | Contenu |
 |---|---|
-| `users` | Comptes (donateur, bénéficiaire, association, admin), position, statut actif/suspendu |
+| `actors` | Acteurs proposés à l'inscription (particulier, commerçant…), configurés par l'admin, avec leurs droits |
+| `users` | Comptes : nom, prénom, sexe, âge, téléphone, acteur, droits, position, statut `pending` → `active` / `suspended` |
+| `email_otps` | Codes d'activation envoyés par e-mail (hachés, 10 min, 5 essais) |
 | `associations` | Informations des associations et statut de validation |
 | `categories` | Catégories d'aliments |
 | `impact_factors` | Facteurs par catégorie : kg de CO2 évités et repas par kg sauvé |

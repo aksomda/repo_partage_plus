@@ -19,17 +19,32 @@ final authTokenProvider = NotifierProvider<AuthToken, String?>(AuthToken.new);
 
 /// Erreur renvoyée par l'API, avec le message lisible du champ `error`.
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.code, this.details});
 
   final String message;
   final int? statusCode;
+
+  /// Code métier renvoyé dans `details.code` (ex. `account_pending`).
+  final String? code;
+  final Map<String, dynamic>? details;
+
+  /// true si le serveur n'a pas pu être joint.
+  bool get isNetwork => statusCode == null;
 
   factory ApiException.fromDio(DioException error) {
     final data = error.response?.data;
     final message = data is Map && data['error'] is String
         ? data['error'] as String
         : 'Impossible de joindre le serveur';
-    return ApiException(message, statusCode: error.response?.statusCode);
+    final details = data is Map && data['details'] is Map
+        ? Map<String, dynamic>.from(data['details'] as Map)
+        : null;
+    return ApiException(
+      message,
+      statusCode: error.response?.statusCode,
+      code: details?['code'] as String?,
+      details: details,
+    );
   }
 
   @override

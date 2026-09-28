@@ -27,7 +27,8 @@ async function userFromRequest(req) {
     [Number(payload.sub)],
   );
   if (!user) throw new HttpError(401, 'Compte introuvable');
-  if (user.status !== 'active') throw new HttpError(403, 'Compte suspendu');
+  if (user.status === 'pending') throw new HttpError(403, 'Compte non activé');
+  if (user.status !== 'active') throw new HttpError(403, 'Compte désactivé');
   return user;
 }
 

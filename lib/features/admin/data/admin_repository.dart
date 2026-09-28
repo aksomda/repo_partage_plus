@@ -1,5 +1,7 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/pending_action.dart';
@@ -28,6 +30,43 @@ final pendingAssociationsProvider = Provider<List<Json>>((ref) {
   return asJsonList(
     _adminSnapshot(ref)?['pending_associations'],
   ).where((association) => !handled.contains(association['id'])).toList();
+});
+
+/// Acteurs configurés, y compris ceux modifiés hors ligne pas encore envoyés.
+final actorsProvider = Provider<List<Json>>(
+  (ref) => asJsonList(_adminSnapshot(ref)?['actors']),
+);
+
+/// Filtres de la liste des comptes (écran de modération).
+typedef UserFilters = ({String? status, String query});
+
+/// Comptes utilisateurs : lus en direct sur l'API (pas copiés sur l'appareil).
+final adminUsersProvider = FutureProvider.autoDispose
+    .family<List<Json>, UserFilters>((ref, filters) async {
+      try {
+        final response = await ref
+            .read(dioProvider)
+            .get<List<dynamic>>(
+              ApiEndpoints.adminUsers,
+              queryParameters: {
+                'limit': 100,
+                'status': ?filters.status,
+                if (filters.query.isNotEmpty) 'q': filters.query,
+              },
+            );
+        return asJsonList(response.data);
+      } on DioException catch (error) {
+        throw ApiException.fromDio(error);
+      }
+    });
+
+/// Statut demandé hors ligne pour un compte, en attente d'envoi.
+final pendingUserStatusProvider = Provider<Map<int, String>>((ref) {
+  return {
+    for (final action in ref.watch(waitingActionsProvider))
+      if (action.kind == 'user.status' && action.targetId != null)
+        action.targetId!: action.body!['status']! as String,
+  };
 });
 
 final factorsProvider = Provider<List<Json>>(
@@ -88,7 +127,54 @@ class AdminRepository {
         path: ApiEndpoints.userStatus(userId),
         body: {'status': suspended ? 'suspended' : 'active', 'reason': ?reason},
         targetId: userId,
-        label: suspended ? 'Suspension du compte' : 'Réactivation du compte',
+        label: suspended ? 'Désactivation du compte' : 'Réactivation du compte',
+      ),
+    );
+  }
+
+  /// Crée ([id] null) ou modifie un acteur.
+  Future<SubmitResult> saveActor({
+    int? id,
+    required String code,
+    required String label,
+    String? description,
+    String? icon,
+    required String permissionRole,
+    required bool selfSignup,
+    required bool active,
+    int sortOrder = 0,
+  }) {
+    return _sync.submit(
+      PendingAction(
+        kind: 'actor.save',
+        method: id == null ? 'POST' : 'PUT',
+        path: id == null
+            ? ApiEndpoints.adminActors
+            : ApiEndpoints.adminActor(id),
+        body: {
+          'code': code,
+          'label': label,
+          'description': description,
+          'icon': icon,
+          'permission_role': permissionRole,
+          'self_signup': selfSignup,
+          'active': active,
+          'sort_order': sortOrder,
+        },
+        targetId: id,
+        label: 'Acteur « $label »',
+      ),
+    );
+  }
+
+  Future<SubmitResult> deleteActor(int id, String label) {
+    return _sync.submit(
+      PendingAction(
+        kind: 'actor.delete',
+        method: 'DELETE',
+        path: ApiEndpoints.adminActor(id),
+        targetId: id,
+        label: 'Suppression de l’acteur « $label »',
       ),
     );
   }

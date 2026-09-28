@@ -66,6 +66,10 @@ syncRouter.get('/', authenticate, async (req, res) => {
            FROM associations a JOIN users u ON u.id = a.user_id
            WHERE a.status = 'pending' ORDER BY a.created_at ASC`,
         ),
+        actors: await query(
+          `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
+           FROM actors a ORDER BY a.sort_order, a.label`,
+        ),
         factors: await query(
           `SELECT f.*, c.name AS category_name FROM impact_factors f
            JOIN categories c ON c.id = f.category_id ORDER BY c.name`,

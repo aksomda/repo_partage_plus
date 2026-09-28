@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/association_validation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/categories_screen.dart';
@@ -12,6 +13,7 @@ import 'package:repo_partage_plus/features/auth/presentation/login_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/profile_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/register_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/splash_screen.dart';
+import 'package:repo_partage_plus/features/auth/presentation/verify_email_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/home_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
@@ -41,6 +43,12 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
       GoRoute(
         path: AppRoutes.register,
         builder: (context, state) => const RegisterScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.verifyEmail,
+        builder: (context, state) => VerifyEmailScreen(
+          initialEmail: state.uri.queryParameters['email'] ?? '',
+        ),
       ),
       GoRoute(
         path: AppRoutes.profile,
@@ -131,6 +139,10 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
       GoRoute(
         path: AppRoutes.adminFactors,
         builder: (context, state) => const FactorsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminActors,
+        builder: (context, state) => const ActorsScreen(),
       ),
     ],
   );

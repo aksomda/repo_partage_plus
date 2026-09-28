@@ -33,6 +33,24 @@ export const config = {
     intervalMinutes: Number(env.JOBS_INTERVAL_MINUTES ?? 15),
     token: env.JOBS_TOKEN || null,
   },
+  firebase: {
+    projectId: env.FIREBASE_PROJECT_ID || null,
+    // Contenu JSON du compte de service, brut ou encodé en base64.
+    serviceAccount: env.FIREBASE_SERVICE_ACCOUNT || null,
+  },
+  smtp: {
+    host: env.SMTP_HOST || null,
+    port: Number(env.SMTP_PORT || 587),
+    secure: env.SMTP_SECURE === 'true',
+    user: env.SMTP_USER || null,
+    password: env.SMTP_PASSWORD || null,
+    from: env.MAIL_FROM || 'Partage+ <no-reply@partage-plus.local>',
+  },
+  otp: {
+    ttlMinutes: Number(env.OTP_TTL_MINUTES || 10),
+    maxAttempts: 5,
+    resendDelaySeconds: 60,
+  },
   seed: {
     lat: Number(env.SEED_LAT || 12.3714),
     lng: Number(env.SEED_LNG || -1.5197),

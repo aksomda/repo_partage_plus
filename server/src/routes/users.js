@@ -45,6 +45,9 @@ usersRouter.put('/me/password', async (req, res) => {
     req.user.id,
   ]);
 
+  if (!row.password_hash) {
+    throw new HttpError(400, 'Mot de passe géré par Firebase : utilisez « Mot de passe oublié »');
+  }
   if (!(await bcrypt.compare(data.current_password, row.password_hash))) {
     throw new HttpError(400, 'Mot de passe actuel incorrect');
   }
