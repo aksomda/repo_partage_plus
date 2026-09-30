@@ -67,13 +67,18 @@ class ReservationsRepository {
     required int offerId,
     required String offerTitle,
     int quantity = 1,
+    String? paymentReference,
   }) {
     return _sync.submit(
       PendingAction(
         kind: 'reservation.create',
         method: 'POST',
         path: ApiEndpoints.reservations,
-        body: {'offer_id': offerId, 'quantity': quantity},
+        body: {
+          'offer_id': offerId,
+          'quantity': quantity,
+          'payment_reference': ?paymentReference,
+        },
         label: 'Réservation de « $offerTitle »',
       ),
     );

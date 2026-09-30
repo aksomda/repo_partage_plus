@@ -1,6 +1,9 @@
+import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:repo_partage_plus/core/firebase/firebase_rest.dart';
 
 /// Erreur d'authentification Firebase, avec un message lisible.
 class FirebaseAuthFailure implements Exception {
@@ -99,6 +102,108 @@ class FirebaseAuthGateway implements AuthGateway {
   };
 }
 
+/// Firebase Auth par ses API HTTP officielles (Identity Toolkit), pour
+/// Windows / Linux / macOS où le paquet firebase_auth n'est pas utilisable
+/// en production. Même comportement que [FirebaseAuthGateway].
+class RestAuthGateway implements AuthGateway {
+  RestAuthGateway(this._dio, this._config);
+
+  final Dio _dio;
+  final FirebaseRestConfig? _config;
+
+  /// Jeton de la dernière connexion (pour supprimer le compte si besoin).
+  String? _idToken;
+
+  static const _base = 'https://identitytoolkit.googleapis.com/v1/accounts';
+
+  Future<Map<String, dynamic>> _call(
+    String action,
+    Map<String, Object?> body,
+  ) async {
+    final config = _config;
+    if (config == null) {
+      throw const FirebaseAuthFailure(
+        'not-configured',
+        'Firebase n’est pas configuré dans cette version de l’application',
+      );
+    }
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '$_base:$action',
+        queryParameters: {'key': config.apiKey},
+        data: body,
+      );
+      return response.data ?? const {};
+    } on DioException catch (error) {
+      if (error.response == null) {
+        throw const FirebaseAuthFailure(
+          'network-request-failed',
+          'Connexion Internet requise',
+        );
+      }
+      final code = _codes[googleErrorCode(error)] ?? 'unknown';
+      throw FirebaseAuthFailure(code, FirebaseAuthGateway._message(code));
+    }
+  }
+
+  /// Codes de l'API HTTP → codes du SDK Firebase utilisés par l'application.
+  static const _codes = {
+    'EMAIL_EXISTS': 'email-already-in-use',
+    'INVALID_EMAIL': 'invalid-email',
+    'WEAK_PASSWORD': 'weak-password',
+    'EMAIL_NOT_FOUND': 'user-not-found',
+    'INVALID_PASSWORD': 'wrong-password',
+    'INVALID_LOGIN_CREDENTIALS': 'invalid-credential',
+    'USER_DISABLED': 'user-disabled',
+    'TOO_MANY_ATTEMPTS_TRY_LATER': 'too-many-requests',
+    // Connexion par e-mail non activée, clé invalide… : comme sans Firebase.
+    'OPERATION_NOT_ALLOWED': 'not-configured',
+    'CONFIGURATION_NOT_FOUND': 'not-configured',
+    'API': 'not-configured',
+  };
+
+  Future<String> _session(String action, String email, String password) async {
+    final data = await _call(action, {
+      'email': email,
+      'password': password,
+      'returnSecureToken': true,
+    });
+    return _idToken = data['idToken'] as String;
+  }
+
+  @override
+  Future<String> createAccount(String email, String password) =>
+      _session('signUp', email, password);
+
+  @override
+  Future<String> signIn(String email, String password) =>
+      _session('signInWithPassword', email, password);
+
+  @override
+  Future<void> deleteCurrentAccount() async {
+    final token = _idToken;
+    if (token != null) await _call('delete', {'idToken': token});
+    _idToken = null;
+  }
+
+  @override
+  Future<void> sendPasswordReset(String email) async {
+    await _call('sendOobCode', {
+      'requestType': 'PASSWORD_RESET',
+      'email': email,
+    });
+  }
+
+  @override
+  Future<void> signOut() async => _idToken = null;
+}
+
+/// SDK Firebase sur Android, iOS et web ; API HTTP sur ordinateur.
 final authGatewayProvider = Provider<AuthGateway>(
-  (ref) => FirebaseAuthGateway(),
+  (ref) => isDesktop
+      ? RestAuthGateway(
+          ref.watch(googleDioProvider),
+          ref.watch(firebaseRestConfigProvider),
+        )
+      : FirebaseAuthGateway(),
 );

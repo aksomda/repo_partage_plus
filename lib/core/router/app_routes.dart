@@ -16,12 +16,15 @@ abstract final class AppRoutes {
   static const home = '/home';
   static const nearbyMap = '/discovery/map';
   static const search = '/discovery/search';
+  static const pickLocation = '/discovery/location';
 
   // Offres
   static const myOffers = '/offers/mine';
   static const createOffer = '/offers/new';
   static const offerDetail = '/offers/:id';
   static String offer(String id) => '/offers/$id';
+  static const reservePattern = '/offers/:id/reserve';
+  static String reserve(Object id) => '/offers/$id/reserve';
 
   // Réservations
   static const myReservations = '/reservations';
@@ -46,6 +49,18 @@ abstract final class AppRoutes {
   static const adminFactors = '/admin/factors';
   static const adminActors = '/admin/actors';
 
+  /// Écrans réservés aux comptes connectés : redirigés vers la connexion.
+  static bool requiresLogin(String path) =>
+      path == profile ||
+      path == notifications ||
+      path == impact ||
+      path.startsWith('/pickup/') ||
+      path == adminDashboard ||
+      path.startsWith('/admin/');
+
+  static String loginThen(String from) =>
+      Uri(path: login, queryParameters: {'from': from}).toString();
+
   /// Écran d'arrivée après connexion, selon les droits du profil.
   static String homeFor(Object? profile) =>
       profile is Map && profile['role'] == 'admin' ? adminAccounts : home;
@@ -69,9 +84,11 @@ final List<RouteMenuEntry> allRouteEntries = [
   const RouteMenuEntry('Accueil', AppRoutes.home),
   const RouteMenuEntry('Offres à proximité', AppRoutes.nearbyMap),
   const RouteMenuEntry('Recherche', AppRoutes.search),
+  const RouteMenuEntry('Point de départ', AppRoutes.pickLocation),
   const RouteMenuEntry('Mes offres', AppRoutes.myOffers),
   const RouteMenuEntry('Publier une offre', AppRoutes.createOffer),
   RouteMenuEntry("Détail de l'offre", AppRoutes.offer('1')),
+  RouteMenuEntry('Réserver', AppRoutes.reserve(1)),
   const RouteMenuEntry('Mes réservations', AppRoutes.myReservations),
   RouteMenuEntry('Confirmation de réservation', AppRoutes.confirmation('1')),
   RouteMenuEntry('Retrait', AppRoutes.pickup('1')),

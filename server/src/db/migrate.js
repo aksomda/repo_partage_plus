@@ -28,17 +28,43 @@ const USER_COLUMNS = {
   email_verified_at: 'DATETIME NULL AFTER status_reason',
 };
 
-/** Met à niveau une base créée avec une version antérieure du schéma. */
-async function upgrade(conn) {
-  const [columns] = await conn.query(
-    "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'",
+/** Colonnes ajoutées pour les invités et le paiement hors application. */
+const OFFER_COLUMNS = {
+  guest_first_name: 'VARCHAR(80) NULL AFTER donor_id',
+  guest_last_name: 'VARCHAR(80) NULL AFTER guest_first_name',
+  guest_phone: 'VARCHAR(30) NULL AFTER guest_last_name',
+  price: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER weight_kg',
+  payment_info: 'VARCHAR(255) NULL AFTER price',
+};
+
+const RESERVATION_COLUMNS = {
+  guest_first_name: 'VARCHAR(80) NULL AFTER beneficiary_id',
+  guest_last_name: 'VARCHAR(80) NULL AFTER guest_first_name',
+  guest_phone: 'VARCHAR(30) NULL AFTER guest_last_name',
+  amount: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER quantity',
+  payment_reference: 'VARCHAR(64) NULL AFTER amount',
+};
+
+async function addMissingColumns(conn, table, columns) {
+  const [rows] = await conn.query(
+    'SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+    [table],
   );
-  const existing = new Set(columns.map((column) => column.name));
-  for (const [column, definition] of Object.entries(USER_COLUMNS)) {
+  const existing = new Set(rows.map((column) => column.name));
+  for (const [column, definition] of Object.entries(columns)) {
     if (!existing.has(column)) {
-      await conn.query(`ALTER TABLE users ADD COLUMN ${column} ${definition}`);
+      await conn.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
+}
+
+/** Met à niveau une base créée avec une version antérieure du schéma. */
+async function upgrade(conn) {
+  await addMissingColumns(conn, 'users', USER_COLUMNS);
+  await addMissingColumns(conn, 'offers', OFFER_COLUMNS);
+  await addMissingColumns(conn, 'reservations', RESERVATION_COLUMNS);
+  await conn.query('ALTER TABLE offers MODIFY donor_id INT UNSIGNED NULL');
+  await conn.query('ALTER TABLE reservations MODIFY beneficiary_id INT UNSIGNED NULL');
 
   await conn.query(`ALTER TABLE users
     MODIFY password_hash VARCHAR(255) NULL,
