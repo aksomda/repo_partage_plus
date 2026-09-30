@@ -99,9 +99,13 @@ CREATE TABLE IF NOT EXISTS impact_factors (
   CONSTRAINT fk_factors_category FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- donor_id NULL : offre publiée par un invité (guest_*), sans compte.
 CREATE TABLE IF NOT EXISTS offers (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  donor_id INT UNSIGNED NOT NULL,
+  donor_id INT UNSIGNED NULL,
+  guest_first_name VARCHAR(80) NULL,
+  guest_last_name VARCHAR(80) NULL,
+  guest_phone VARCHAR(30) NULL,
   category_id INT UNSIGNED NOT NULL,
   title VARCHAR(150) NOT NULL,
   description TEXT NULL,
@@ -109,6 +113,9 @@ CREATE TABLE IF NOT EXISTS offers (
   quantity_available INT UNSIGNED NOT NULL,
   unit VARCHAR(30) NOT NULL DEFAULT 'portion',
   weight_kg DECIMAL(8, 2) NOT NULL,
+  -- Prix par unité en F CFA (0 = don gratuit), payé hors application.
+  price DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  payment_info VARCHAR(255) NULL,
   expiry_date DATE NOT NULL,
   pickup_start DATETIME NOT NULL,
   pickup_end DATETIME NOT NULL,
@@ -131,11 +138,18 @@ CREATE TABLE IF NOT EXISTS offers (
   CONSTRAINT fk_offers_moderator FOREIGN KEY (moderated_by) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- beneficiary_id NULL : réservation faite par un invité (guest_*).
 CREATE TABLE IF NOT EXISTS reservations (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   offer_id INT UNSIGNED NOT NULL,
-  beneficiary_id INT UNSIGNED NOT NULL,
+  beneficiary_id INT UNSIGNED NULL,
+  guest_first_name VARCHAR(80) NULL,
+  guest_last_name VARCHAR(80) NULL,
+  guest_phone VARCHAR(30) NULL,
   quantity INT UNSIGNED NOT NULL,
+  -- Montant dû (prix × quantité) et référence de la transaction faite hors application.
+  amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  payment_reference VARCHAR(64) NULL,
   status ENUM('pending', 'confirmed', 'picked_up', 'cancelled') NOT NULL DEFAULT 'pending',
   pickup_code CHAR(6) NOT NULL,
   confirmed_at DATETIME NULL,
@@ -148,6 +162,16 @@ CREATE TABLE IF NOT EXISTS reservations (
   KEY idx_reservations_offer (offer_id, status),
   CONSTRAINT fk_reservations_offer FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE CASCADE,
   CONSTRAINT fk_reservations_beneficiary FOREIGN KEY (beneficiary_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Jetons remis à un invité pour revoir ou annuler sa publication / réservation
+-- depuis son appareil (stockés hachés, jamais renvoyés par les SELECT o.* / r.*).
+CREATE TABLE IF NOT EXISTS guest_tokens (
+  kind ENUM('offer', 'reservation') NOT NULL,
+  target_id INT UNSIGNED NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (kind, target_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- Réponses déjà envoyées, par clé Idempotency-Key : une action rejouée par

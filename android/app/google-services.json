@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "179535500663",
+    "project_id": "partageplus-f8840",
+    "storage_bucket": "partageplus-f8840.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:179535500663:android:26d5ab83103c141932fd72",
+        "android_client_info": {
+          "package_name": "com.example.repo_partage_plus"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "179535500663-bd8q6clr122tqbsiphh2lc23kanm659b.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbLyFBXOx_6OeB15tWCUgokKVTcNZge4o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "179535500663-bd8q6clr122tqbsiphh2lc23kanm659b.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "179535500663-a17f0290p8t2k4c19cm0atdcpg0678qp.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.repoPartagePlus"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

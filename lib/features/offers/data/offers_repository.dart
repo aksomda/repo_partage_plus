@@ -1,6 +1,9 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:repo_partage_plus/core/guest/guest_repository.dart';
+import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/pending_action.dart';
@@ -126,6 +129,40 @@ final expiringOffersProvider = Provider.family<List<Json>, int>((ref, days) {
             !DateTime.parse(offer['expiry_date'] as String).isAfter(limit),
       )
       .toList();
+});
+
+/// Détail d'une offre : copie locale si elle existe, sinon lecture sur l'API
+/// (offre d'invité encore en modération : lue avec son jeton).
+final offerDetailProvider = FutureProvider.autoDispose.family<Json, int>((
+  ref,
+  offerId,
+) async {
+  final local = [
+    ...ref.watch(snapshotListProvider('offers')),
+    ...ref.watch(snapshotListProvider('my_offers')),
+  ].where((offer) => offer['id'] == offerId).firstOrNull;
+  if (local != null) return local;
+
+  final guest = (ref.watch(guestOffersProvider).value ?? const <Json>[])
+      .where((offer) => offer['id'] == offerId)
+      .firstOrNull;
+  try {
+    final response = await ref
+        .read(dioProvider)
+        .get<Map<String, dynamic>>(
+          ApiEndpoints.offer(offerId),
+          options: guest == null
+              ? null
+              : Options(headers: {'X-Guest-Token': guest['guest_token']}),
+        );
+    return response.data!;
+  } on DioException catch (error) {
+    if (guest != null && error.response == null) return guest;
+    if (error.response == null) {
+      throw ApiException('Offre introuvable hors ligne : reconnectez-vous');
+    }
+    throw ApiException.fromDio(error);
+  }
 });
 
 final categoriesProvider = Provider<List<Json>>(

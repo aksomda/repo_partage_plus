@@ -45,6 +45,16 @@ class SyncService {
 
   Future<SyncReport> sync() async {
     if (await store.readToken() == null) {
+      // Visiteur sans compte : catalogue public seulement (offres, catégories),
+      // pour chercher et consulter les offres même hors ligne ensuite.
+      try {
+        final response = await dio.get<Map<String, dynamic>>(
+          ApiEndpoints.publicSync,
+        );
+        await store.saveSnapshot(response.data!);
+      } on DioException {
+        // Hors ligne : on garde la dernière copie.
+      }
       return const SyncReport(SyncOutcome.loggedOut);
     }
 

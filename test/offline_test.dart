@@ -11,11 +11,6 @@ import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 
 import 'helpers.dart';
 
-Future<ResponseBody> networkDown(RequestOptions request) => throw DioException(
-  requestOptions: request,
-  type: DioExceptionType.connectionError,
-);
-
 Map<String, dynamic> offer({
   required int id,
   double lat = 12.3714,
@@ -224,11 +219,25 @@ void main() {
       expect(await outbox.all(), hasLength(1));
     });
 
-    test('sans session, rien n’est envoyé', () async {
-      await store.clear();
-      await outbox.add(reservation());
-      expect((await sync.sync()).outcome, SyncOutcome.loggedOut);
-      expect(server.requests, isEmpty);
-    });
+    test(
+      'sans session, rien n’est envoyé ; seul le catalogue public est lu',
+      () async {
+        await store.clear();
+        await outbox.add(reservation());
+        server.handler = (request) async => jsonResponse(200, {
+          'categories': [
+            {'id': 1, 'name': 'Boulangerie'},
+          ],
+          'offers': [offer(id: 9)],
+        });
+
+        expect((await sync.sync()).outcome, SyncOutcome.loggedOut);
+        expect(server.requests.map((request) => request.path), [
+          '/sync/public',
+        ]);
+        expect(await store.readSnapshot('offers'), hasLength(1));
+        expect(await outbox.all(), hasLength(1));
+      },
+    );
   });
 }

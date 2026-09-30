@@ -9,7 +9,10 @@ import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.from});
+
+  /// Écran demandé avant la redirection vers la connexion.
+  final String? from;
 
   @override
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
@@ -39,7 +42,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           .read(localStoreProvider)
           .readSnapshot('profile');
       if (!mounted) return;
-      context.go(AppRoutes.homeFor(profile));
+      context.go(widget.from ?? AppRoutes.homeFor(profile));
     } on AccountPendingException catch (error) {
       if (!mounted) return;
       showMessage(context, error.toString());
@@ -74,7 +77,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return AuthLayout(
-      onBack: context.canPop() ? context.pop : null,
+      onBack: () =>
+          context.canPop() ? context.pop() : context.go(AppRoutes.home),
       children: [
         const Center(child: BrandLogo(size: 32)),
         const SizedBox(height: 32),

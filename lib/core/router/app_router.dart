@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
@@ -15,6 +17,7 @@ import 'package:repo_partage_plus/features/auth/presentation/register_screen.dar
 import 'package:repo_partage_plus/features/auth/presentation/splash_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/verify_email_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/home_screen.dart';
+import 'package:repo_partage_plus/features/discovery/presentation/location_picker_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
 import 'package:repo_partage_plus/features/impact/presentation/impact_screen.dart';
@@ -25,11 +28,25 @@ import 'package:repo_partage_plus/features/offers/presentation/offer_detail_scre
 import 'package:repo_partage_plus/features/pickup/presentation/pickup_screen.dart';
 import 'package:repo_partage_plus/features/recommendations/presentation/recommendations_screen.dart';
 import 'package:repo_partage_plus/features/reservations/presentation/my_reservations_screen.dart';
+import 'package:repo_partage_plus/features/reservations/presentation/reserve_screen.dart';
 import 'package:repo_partage_plus/features/reservations/presentation/reservation_confirmation_screen.dart';
 
-GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
+/// [isLoggedIn] : null (tests) = aucune redirection vers la connexion.
+GoRouter createRouter({
+  String initialLocation = AppRoutes.splash,
+  bool Function()? isLoggedIn,
+  Listenable? refreshListenable,
+}) {
   return GoRouter(
     initialLocation: initialLocation,
+    refreshListenable: refreshListenable,
+    redirect: (context, state) {
+      if (isLoggedIn == null || isLoggedIn()) return null;
+      final path = state.uri.path;
+      return AppRoutes.requiresLogin(path)
+          ? AppRoutes.loginThen(state.uri.toString())
+          : null;
+    },
     routes: [
       // Auth
       GoRoute(
@@ -38,7 +55,8 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
       ),
       GoRoute(
         path: AppRoutes.login,
-        builder: (context, state) => const LoginScreen(),
+        builder: (context, state) =>
+            LoginScreen(from: state.uri.queryParameters['from']),
       ),
       GoRoute(
         path: AppRoutes.register,
@@ -68,6 +86,10 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
         path: AppRoutes.search,
         builder: (context, state) => const SearchScreen(),
       ),
+      GoRoute(
+        path: AppRoutes.pickLocation,
+        builder: (context, state) => const LocationPickerScreen(),
+      ),
 
       // Offres : les chemins fixes avant /offers/:id
       GoRoute(
@@ -82,6 +104,11 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
         path: AppRoutes.offerDetail,
         builder: (context, state) =>
             OfferDetailScreen(offerId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: AppRoutes.reservePattern,
+        builder: (context, state) =>
+            ReserveScreen(offerId: int.parse(state.pathParameters['id']!)),
       ),
 
       // Réservations et retrait
@@ -148,8 +175,20 @@ GoRouter createRouter({String initialLocation = AppRoutes.splash}) {
   );
 }
 
+/// Prévient le routeur quand la session change (connexion, déconnexion).
+class _SessionListenable extends ChangeNotifier {
+  void changed() => notifyListeners();
+}
+
 final routerProvider = Provider<GoRouter>((ref) {
-  final router = createRouter();
+  final session = _SessionListenable();
+  ref.listen(authTokenProvider, (_, _) => session.changed());
+  ref.onDispose(session.dispose);
+
+  final router = createRouter(
+    isLoggedIn: () => ref.read(authTokenProvider) != null,
+    refreshListenable: session,
+  );
   ref.onDispose(router.dispose);
   return router;
 });

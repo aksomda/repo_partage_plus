@@ -15,11 +15,23 @@ const email = z.string().trim().toLowerCase().email().max(190);
 const idToken = z.string().min(20).max(5000);
 
 /**
- * Inscription : le compte Firebase (email + mot de passe) est déjà créé par
- * l'application, qui envoie son jeton ; l'email est lu dans ce jeton.
+ * Inscription, deux modes :
+ * - Firebase : le compte (email + mot de passe) est déjà créé par
+ *   l'application, qui envoie son jeton ; l'email est lu dans ce jeton ;
+ * - compte local (Firebase indisponible, ex. Windows/Linux sans Firebase) :
+ *   email + mot de passe envoyés à l'API, mot de passe haché dans MySQL.
  */
+const password = z
+  .string()
+  .min(8, '8 caractères minimum')
+  .max(100)
+  .regex(/[0-9]/, 'Au moins un chiffre')
+  .regex(/[A-Za-z]/, 'Au moins une lettre');
+
 const registerSchema = z.object({
-  id_token: idToken,
+  id_token: idToken.optional(),
+  email: email.optional(),
+  password: password.optional(),
   first_name: z.string().trim().min(2).max(80),
   last_name: z.string().trim().min(2).max(80),
   gender: z.enum(['male', 'female']),
@@ -39,6 +51,11 @@ const registerSchema = z.object({
     })
     .optional(),
 });
+
+const registerModeSchema = registerSchema.refine(
+  (data) => (data.id_token ? !data.password : Boolean(data.email && data.password)),
+  { message: 'Jeton Firebase, ou adresse e-mail et mot de passe, requis', path: ['id_token'] },
+);
 
 const verifySchema = z.object({ email, code: z.string().trim().regex(/^\d{6}$/, 'Code à 6 chiffres') });
 const loginSchema = z.object({ email, password: z.string().min(1) });
@@ -83,9 +100,12 @@ async function session(res, userId) {
 }
 
 authRouter.post('/register', async (req, res) => {
-  const data = registerSchema.parse(req.body);
-  const identity = await firebase.verifyIdToken(data.id_token);
+  const data = registerModeSchema.parse(req.body);
+  const identity = data.id_token
+    ? await firebase.verifyIdToken(data.id_token)
+    : { uid: null, email: data.email };
   if (!identity.email) throw new HttpError(400, 'Le compte Firebase n’a pas d’adresse e-mail');
+  const passwordHash = data.password ? await bcrypt.hash(data.password, 10) : null;
 
   const [actor] = await query('SELECT * FROM actors WHERE id = ?', [data.actor_id]);
   if (!actor || !actor.active || !actor.self_signup) {
@@ -101,8 +121,15 @@ authRouter.post('/register', async (req, res) => {
     const [[existing]] = await conn.query('SELECT * FROM users WHERE email = ? FOR UPDATE', [
       identity.email,
     ]);
-    // Nouvelle tentative après un échec (e-mail non reçu…) : on met à jour.
-    const retry = existing && existing.firebase_uid === identity.uid && existing.status === 'pending';
+    // Nouvelle tentative après un échec (e-mail non reçu…) : on met à jour,
+    // si c'est bien le même compte (même compte Firebase, ou même mot de passe).
+    const sameAccount = identity.uid
+      ? existing?.firebase_uid === identity.uid
+      : Boolean(
+          existing?.password_hash &&
+            (await bcrypt.compare(data.password, existing.password_hash)),
+        );
+    const retry = existing && existing.status === 'pending' && sameAccount;
     if (existing && !retry) {
       throw new HttpError(409, 'Un compte existe déjà avec cette adresse e-mail');
     }
@@ -115,6 +142,7 @@ authRouter.post('/register', async (req, res) => {
       age: data.age,
       email: identity.email,
       firebase_uid: identity.uid,
+      password_hash: passwordHash,
       role: actor.permission_role,
       actor_id: actor.id,
       phone: data.phone,

@@ -3,6 +3,9 @@ abstract final class ApiEndpoints {
   /// Instantané complet pour le mode hors ligne.
   static const sync = '/sync';
 
+  /// Catalogue public (offres disponibles, catégories), sans compte.
+  static const publicSync = '/sync/public';
+
   // Auth et profil
   static const register = '/auth/register';
   static const login = '/auth/login';
@@ -33,6 +36,7 @@ abstract final class ApiEndpoints {
   static String confirmReservation(int id) => '/reservations/$id/confirm';
   static String cancelReservation(int id) => '/reservations/$id/cancel';
   static String pickup(int id) => '/reservations/$id/pickup';
+  static String guestReservation(int id) => '/reservations/guest/$id';
 
   // Notifications
   static const notifications = '/notifications';
@@ -44,6 +48,7 @@ abstract final class ApiEndpoints {
   static const myImpact = '/impact/me';
   static const globalImpact = '/impact/global';
   static const recommendations = '/recommendations';
+  static const refineRecommendations = '/recommendations/refine';
 
   // Administration
   static const adminStats = '/admin/stats';
