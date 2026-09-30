@@ -1,4 +1,4 @@
-name: repo_partage_plus
+﻿name: repo_partage_plus
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -44,26 +44,22 @@ dependencies:
 
   # Authentification
   firebase_core: 4.15.0
-<<<<<<< HEAD
-  firebase_auth: 6.7.0
-  cloud_firestore: ^6.10.0
-  cloud_functions: ^6.5.0
-  fl_chart: ^1.2.0
-=======
   firebase_auth: ^6.7.0
 
-  # Itinéraire vers le lieu de retrait dans OsmAnd (cartes hors ligne)
+  # Itineraire vers le lieu de retrait dans OsmAnd (cartes hors ligne)
   android_intent_plus: 6.1.0
   url_launcher: 6.3.2
   rodiumai: ^0.1.1
 
-  # Recommandations : affinage par IA via Cloud Functions, préférences dictées
+  # Recommandations : affinage par IA via Cloud Functions, preferences dictees
   cloud_functions: 6.5.0
   speech_to_text: 7.5.0
   firebase_ai: ^4.0.0
   firebase_messaging: ^16.7.0
   firebase_storage: ^13.6.0
->>>>>>> origin/dev
+
+  # Graphiques (tableau de bord d'impact)
+  fl_chart: 1.2.0
 
 dev_dependencies:
   flutter_test:
