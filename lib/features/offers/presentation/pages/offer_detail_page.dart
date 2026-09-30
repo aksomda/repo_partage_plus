@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../domain/entities/offer.dart';
 import '../../../recommendations/domain/services/recommendation_score_service.dart';
+
 class OfferDetailPage extends StatefulWidget {
   final Offer offer;
   final RecommendationResult? recommendation;
