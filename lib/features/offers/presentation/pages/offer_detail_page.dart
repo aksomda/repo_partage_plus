@@ -149,35 +149,35 @@ class _OfferDetailPageState extends State<OfferDetailPage> {
     );
   }
 
-Widget _buildPickupSlots() {
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text(
-        'Créneau de retrait',
-        style: TextStyle(fontWeight: FontWeight.bold),
-      ),
-      const SizedBox(height: 10),
-      RadioGroup<PickupSlot>(
-        groupValue: _selectedSlot,
-        onChanged: (value) => setState(() => _selectedSlot = value),
-        child: Column(
-          children: offer.pickupSlots
-              .map(
-                (slot) => RadioListTile<PickupSlot>(
-                  contentPadding: EdgeInsets.zero,
-                  value: slot,
-                  enabled: !slot.isFull,
-                  title: Text(_formatSlot(slot)),
-                  subtitle: Text('${slot.availablePlaces} places'),
-                ),
-              )
-              .toList(),
+  Widget _buildPickupSlots() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Créneau de retrait',
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-      ),
-    ],
-  );
-}
+        const SizedBox(height: 10),
+        RadioGroup<PickupSlot>(
+          groupValue: _selectedSlot,
+          onChanged: (value) => setState(() => _selectedSlot = value),
+          child: Column(
+            children: offer.pickupSlots
+                .map(
+                  (slot) => RadioListTile<PickupSlot>(
+                    contentPadding: EdgeInsets.zero,
+                    value: slot,
+                    enabled: !slot.isFull,
+                    title: Text(_formatSlot(slot)),
+                    subtitle: Text('${slot.availablePlaces} places'),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _buildQuantitySelector() {
     return Row(
