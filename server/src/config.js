@@ -46,6 +46,12 @@ export const config = {
     password: env.SMTP_PASSWORD || null,
     from: env.MAIL_FROM || 'Partage+ <no-reply@partage-plus.local>',
   },
+  // IA de recommandation intégrée au serveur (repli de la Cloud Function).
+  rodium: {
+    apiKey: env.RODIUM_API_KEY || null,
+    model: env.RODIUM_MODEL || 'openai/gpt-4o-mini',
+    callsPerHour: Number(env.AI_CALLS_PER_HOUR || 30),
+  },
   otp: {
     ttlMinutes: Number(env.OTP_TTL_MINUTES || 10),
     maxAttempts: 5,

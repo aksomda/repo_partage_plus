@@ -143,6 +143,12 @@ export async function seed({ fresh = false } = {}) {
         ],
       );
     }
+
+    // Une offre payante (paiement Mobile Money hors application).
+    await conn.query(
+      `UPDATE offers SET price = 250, payment_info = 'Orange Money +226 70 00 00 00'
+       WHERE title = 'Panier de mangues'`,
+    );
   });
 
   return true;

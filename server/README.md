@@ -43,6 +43,32 @@ envoyé par e-mail par l'API : configuration et schéma dans
 | `GET/POST/PUT/DELETE /api/admin/actors` | Configuration des acteurs |
 | `PATCH /api/admin/users/:id/status` | Désactivation / réactivation (répercutée sur Firebase) |
 
+## Utilisation sans compte (invités)
+
+Consulter, rechercher, publier et réserver sont possibles sans compte.
+L'invité donne nom, prénom et téléphone ; l'API renvoie un `guest_token`
+(une seule fois, stocké haché dans `guest_tokens`) que l'application garde
+pour suivre ou annuler depuis l'appareil (en-tête `X-Guest-Token`).
+Limite : 10 publications et 20 réservations sans compte par heure et par IP.
+
+| Route | Rôle |
+|---|---|
+| `GET /api/sync/public` | Catalogue public : catégories et offres disponibles |
+| `POST /api/offers` | Avec jeton de session, ou `guest: {first_name, last_name, phone}` |
+| `GET` / `DELETE /api/offers/:id` + `X-Guest-Token` | Voir (même en modération) / retirer son offre d'invité |
+| `POST /api/reservations` | Avec session ou `guest` ; `payment_reference` obligatoire si l'offre est payante |
+| `GET /api/reservations/guest/:id` + `X-Guest-Token` | Suivre sa réservation d'invité (code de retrait inclus) |
+| `PATCH /api/reservations/:id/cancel` + `X-Guest-Token` | Annuler sa réservation d'invité |
+
+**Paiement hors application** : `offers.price` (F CFA par unité, 0 = gratuit)
+et `payment_info` (ex. « Orange Money 70 00 00 00 »). L'acheteur paie puis
+saisit la référence de la transaction (`reservations.payment_reference`) ;
+le publieur la voit dans les réservations reçues avant de confirmer.
+
+**Offre publiée par un invité** : personne ne peut la confirmer dans l'app,
+les réservations sont confirmées d'office et le retrait se convient par
+téléphone (`contact_phone`). Tous les acteurs connectés (sauf admin) publient.
+
 ## Comptes de démo
 
 Mot de passe commun : `Demo1234!`

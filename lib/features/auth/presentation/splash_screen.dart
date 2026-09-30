@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
@@ -18,6 +19,19 @@ class SplashScreen extends ConsumerStatefulWidget {
 }
 
 class _SplashScreenState extends ConsumerState<SplashScreen> {
+  var _starting = false;
+
+  /// Demande l'autorisation de localisation (téléphone, navigateur, Windows),
+  /// puis ouvre les offres à proximité. En cas de refus, l'accueil propose
+  /// de choisir un point de départ sur la carte.
+  Future<void> _start() async {
+    setState(() => _starting = true);
+    await ref.read(originProvider.notifier).useCurrentPosition();
+    if (!mounted) return;
+    setState(() => _starting = false);
+    context.go(AppRoutes.home);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -75,9 +89,33 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                       ),
                     ),
                     const SizedBox(height: 48),
-                    FilledButton(
+                    FilledButton.icon(
+                      onPressed: _starting ? null : _start,
+                      icon: _starting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.near_me_outlined),
+                      label: const Text('Commencer'),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Voir les offres autour de vous, sans compte',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton(
                       onPressed: () => context.push(AppRoutes.register),
-                      child: const Text('Commencer'),
+                      child: const Text('S’inscrire'),
                     ),
                     const SizedBox(height: 8),
                     Wrap(

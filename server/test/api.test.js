@@ -15,6 +15,8 @@ const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
 const { sentMails } = await import('../src/services/mailer.js');
+const { config } = await import('../src/config.js');
+const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js');
 const { HttpError } = await import('../src/http/errors.js');
 
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
@@ -267,9 +269,9 @@ describe('parcours offre → réservation → retrait', () => {
     assert.ok(!list.body.some((offer) => offer.id === offerId));
   });
 
-  test('un bénéficiaire ne peut pas publier', async () => {
+  test('une offre incomplète est refusée', async () => {
     const res = await api.post('/api/offers').set(as('beneficiary')).send({});
-    assert.equal(res.status, 403);
+    assert.equal(res.status, 400);
   });
 
   test("l'admin valide l'offre, qui apparaît à proximité", async () => {
@@ -380,6 +382,179 @@ describe('parcours offre → réservation → retrait', () => {
     assert.equal(res.status, 200);
     assert.ok(res.body.length > 0);
     assert.ok(res.body[0].affinity >= 1);
+  });
+});
+
+describe('invités (sans compte) et paiement hors application', () => {
+  const guest = { first_name: 'Moussa', last_name: 'Kaboré', phone: '+226 76 11 22 33' };
+  let categoryId;
+  let guestOffer;
+  let paidOffer;
+  let guestReservation;
+
+  const offerBody = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre invité',
+    quantity: 4,
+    weight_kg: 2,
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(-1),
+    pickup_end: futureIso(6),
+    address: 'Marché central',
+    latitude: 12.372,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  async function approve(offerId) {
+    const res = await api
+      .patch(`/api/admin/offers/${offerId}/moderation`)
+      .set(as('admin'))
+      .send({ decision: 'approve' });
+    assert.equal(res.status, 200, res.text);
+  }
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+  });
+
+  test('instantané public sans compte : catégories et offres disponibles', async () => {
+    const res = await api.get('/api/sync/public');
+    assert.equal(res.status, 200);
+    assert.ok(res.body.categories.length >= 6);
+    assert.ok(res.body.offers.length > 0);
+    assert.equal(res.body.profile, undefined);
+  });
+
+  test('un invité publie : identité obligatoire, jeton remis une seule fois', async () => {
+    const missing = await api.post('/api/offers').send(offerBody());
+    assert.equal(missing.status, 400);
+
+    const res = await api.post('/api/offers').send(offerBody({ guest }));
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.status, 'pending');
+    assert.equal(res.body.donor_id, null);
+    assert.equal(res.body.is_guest, 1);
+    assert.equal(res.body.donor_name, 'Moussa Kaboré');
+    assert.equal(res.body.publisher_type, 'invite');
+    assert.equal(res.body.contact_phone, guest.phone);
+    assert.ok(res.body.guest_token.length > 20);
+    guestOffer = res.body;
+
+    // Offre en modération : visible par son auteur (jeton), pas par les autres.
+    assert.equal((await api.get(`/api/offers/${guestOffer.id}`)).status, 404);
+    const own = await api
+      .get(`/api/offers/${guestOffer.id}`)
+      .set('X-Guest-Token', guestOffer.guest_token);
+    assert.equal(own.status, 200);
+    assert.equal(own.body.guest_token, undefined);
+  });
+
+  test('offre payante : instructions de paiement obligatoires', async () => {
+    const without = await api
+      .post('/api/offers')
+      .set(as('beneficiary'))
+      .send(offerBody({ title: 'Jus de fruits', price: 500 }));
+    assert.equal(without.status, 400);
+
+    // Un particulier connecté peut publier (tous les acteurs publient).
+    const res = await api
+      .post('/api/offers')
+      .set(as('beneficiary'))
+      .send(
+        offerBody({ title: 'Jus de fruits', price: 500, payment_info: 'Orange Money 70 00 00 00' }),
+      );
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.price, 500);
+    assert.equal(res.body.publisher_type, 'particulier');
+    paidOffer = res.body;
+    await approve(paidOffer.id);
+    await approve(guestOffer.id);
+  });
+
+  test('un invité réserve une offre payante avec la référence de sa transaction', async () => {
+    const noReference = await api
+      .post('/api/reservations')
+      .send({ offer_id: paidOffer.id, quantity: 2, guest });
+    assert.equal(noReference.status, 400);
+    assert.match(noReference.body.error, /Référence de paiement/);
+
+    const res = await api
+      .post('/api/reservations')
+      .send({ offer_id: paidOffer.id, quantity: 2, payment_reference: 'OM240929.1234', guest });
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.amount, 1000);
+    assert.equal(res.body.status, 'pending');
+    assert.equal(res.body.beneficiary_name, 'Moussa Kaboré');
+    assert.match(res.body.pickup_code, /^\d{6}$/);
+    assert.ok(res.body.guest_token);
+    guestReservation = res.body;
+
+    const again = await api
+      .post('/api/reservations')
+      .send({ offer_id: paidOffer.id, payment_reference: 'OM240929.9999', guest });
+    assert.equal(again.status, 409);
+  });
+
+  test('le publieur voit la référence de paiement mais pas le code, puis confirme', async () => {
+    const received = await api.get('/api/reservations/received').set(as('beneficiary'));
+    const row = received.body.find((item) => item.id === guestReservation.id);
+    assert.equal(row.payment_reference, 'OM240929.1234');
+    assert.equal(row.beneficiary_phone, guest.phone);
+    assert.equal(row.pickup_code, undefined);
+
+    const confirmed = await api
+      .patch(`/api/reservations/${guestReservation.id}/confirm`)
+      .set(as('beneficiary'));
+    assert.equal(confirmed.status, 200, confirmed.text);
+  });
+
+  test("l'invité suit sa réservation avec son jeton, et elle seule", async () => {
+    const path = `/api/reservations/guest/${guestReservation.id}`;
+    assert.equal((await api.get(path)).status, 404);
+    assert.equal((await api.get(path).set('X-Guest-Token', 'mauvais-jeton')).status, 404);
+
+    const res = await api.get(path).set('X-Guest-Token', guestReservation.guest_token);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.status, 'confirmed');
+    assert.equal(res.body.pickup_code, guestReservation.pickup_code);
+  });
+
+  test("réserver l'offre d'un invité : confirmée d'office, téléphone du publieur donné", async () => {
+    const res = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: guestOffer.id, quantity: 1 });
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.status, 'confirmed');
+    assert.equal(res.body.is_guest_offer, 1);
+    assert.equal(res.body.donor_phone, guest.phone);
+  });
+
+  test("l'invité annule sa réservation avec son jeton ; la quantité est rendue", async () => {
+    const path = `/api/reservations/${guestReservation.id}/cancel`;
+    assert.equal((await api.patch(path)).status, 404);
+
+    const res = await api.patch(path).set('X-Guest-Token', guestReservation.guest_token);
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.status, 'cancelled');
+
+    const offer = await api.get(`/api/offers/${paidOffer.id}`);
+    assert.equal(offer.body.quantity_available, paidOffer.quantity_available);
+  });
+
+  test("l'invité retire son offre avec son jeton, personne d'autre", async () => {
+    const path = `/api/offers/${guestOffer.id}`;
+    assert.equal((await api.delete(path)).status, 403);
+    assert.equal((await api.delete(path).set(as('donor'))).status, 403);
+
+    const res = await api.delete(path).set('X-Guest-Token', guestOffer.guest_token);
+    assert.equal(res.status, 204);
+  });
+
+  test("l'administrateur ne publie pas", async () => {
+    const res = await api.post('/api/offers').set(as('admin')).send(offerBody());
+    assert.equal(res.status, 403);
   });
 });
 
@@ -594,5 +769,154 @@ describe('administration', () => {
   test("les routes admin sont interdites aux autres rôles", async () => {
     const res = await api.get('/api/admin/stats').set(as('donor'));
     assert.equal(res.status, 403);
+  });
+});
+
+describe('sans Firebase (Windows / Linux) : compte local et IA du serveur', () => {
+  const prompts = [];
+
+  before(() => {
+    config.rodium.apiKey = 'rd_sk_test';
+    resetAiRateLimit();
+  });
+  after(() => {
+    config.rodium.apiKey = null;
+    setRodiumFetch(null);
+  });
+
+  /** Faux RodiumAI : classe les offres reçues dans l'ordre inverse. */
+  function fakeRodium() {
+    setRodiumFetch(async (url, options) => {
+      const body = JSON.parse(options.body);
+      prompts.push(JSON.parse(body.messages[1].content));
+      const ids = prompts.at(-1).offres.map((offer) => offer.id).reverse();
+      const ranking = [{ id: 999999, reason: 'inventée' }, ...ids.map((id) => ({ id, reason: 'ok' }))];
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: JSON.stringify({ ranking }) } }] }),
+        { status: 200 },
+      );
+    });
+  }
+
+  test('inscription locale : mot de passe haché dans MySQL, code, puis connexion', async () => {
+    const [actor] = (await api.get('/api/actors')).body;
+    const payload = {
+      email: 'local@test.local',
+      password: 'motdepasse1',
+      first_name: 'Ali',
+      last_name: 'Ouédraogo',
+      gender: 'male',
+      age: 30,
+      phone: '+226 70 11 22 33',
+      actor_id: actor.id,
+    };
+    const created = await api.post('/api/auth/register').send(payload);
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.body.user.status, 'pending');
+    assert.equal(created.body.user.firebase_uid, null);
+    assert.equal(created.body.user.password_hash, undefined);
+
+    const [row] = await pool
+      .query('SELECT password_hash FROM users WHERE email = ?', ['local@test.local'])
+      .then(([rows]) => rows);
+    assert.ok(row.password_hash.startsWith('$2'));
+
+    const pending = await api
+      .post('/api/auth/login')
+      .send({ email: 'local@test.local', password: 'motdepasse1' });
+    assert.equal(pending.status, 403);
+    assert.equal(pending.body.details.code, 'account_pending');
+
+    // Même e-mail, autre mot de passe : refusé.
+    const other = await api.post('/api/auth/register').send({ ...payload, password: 'autre12345' });
+    assert.equal(other.status, 409);
+
+    const code = lastCode('local@test.local');
+    const verified = await api
+      .post('/api/auth/verify-email')
+      .send({ email: 'local@test.local', code });
+    assert.equal(verified.status, 200, verified.text);
+
+    const login = await api
+      .post('/api/auth/login')
+      .send({ email: 'local@test.local', password: 'motdepasse1' });
+    assert.equal(login.status, 200, login.text);
+    tokens.local = login.body.token;
+  });
+
+  test('inscription : ni jeton Firebase ni mot de passe → 400', async () => {
+    const res = await api.post('/api/auth/register').send({
+      email: 'x@test.local',
+      first_name: 'Xx',
+      last_name: 'Yy',
+      gender: 'male',
+      age: 30,
+      phone: '+226 70 11 22 33',
+      actor_id: 1,
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('IA non configurée sur le serveur : 503 explicite', async () => {
+    config.rodium.apiKey = null;
+    const res = await api.post('/api/recommendations/refine').send({ candidates: [{ id: 1 }] });
+    assert.equal(res.status, 503);
+    assert.equal(res.body.details.code, 'ai_not_configured');
+    config.rodium.apiKey = 'rd_sk_test';
+  });
+
+  test('affinage : offres relues dans MySQL, id inventés écartés', async () => {
+    fakeRodium();
+    const offers = (await api.get('/api/offers?limit=3')).body;
+    const res = await api
+      .post('/api/recommendations/refine')
+      .send({
+        candidates: [...offers.map((offer) => ({ id: offer.id, local_score: 70 })), { id: 999999 }],
+        preferences_text: 'des fruits',
+        latitude: 12.3714,
+        longitude: -1.5197,
+        recent_titles: ['Yaourts nature'],
+      });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.source, 'server');
+    assert.deepEqual(
+      res.body.ranking.map((item) => item.id),
+      offers.map((offer) => offer.id).reverse(),
+    );
+
+    const prompt = prompts.at(-1);
+    // Titres et catégories lus dans MySQL, pas envoyés par l'application.
+    assert.equal(prompt.offres[0].titre, offers[0].title);
+    assert.ok(prompt.offres.every((offer) => offer.distance_km !== null));
+    assert.deepEqual(prompt.historique.consultees, ['Yaourts nature']);
+  });
+
+  test('connecté : les réservations MySQL alimentent l’historique envoyé à l’IA', async () => {
+    fakeRodium();
+    const [offer] = (await api.get('/api/offers?limit=1')).body;
+    const res = await api
+      .post('/api/recommendations/refine')
+      .set(as('beneficiary'))
+      .send({ candidates: [{ id: offer.id }] });
+    assert.equal(res.status, 200, res.text);
+    assert.ok(prompts.at(-1).historique.reservees.length > 0);
+  });
+
+  test('RodiumAI en panne : 503, jamais d’erreur 500', async () => {
+    setRodiumFetch(async () => new Response('panne', { status: 502 }));
+    const [offer] = (await api.get('/api/offers?limit=1')).body;
+    const res = await api.post('/api/recommendations/refine').send({ candidates: [{ id: offer.id }] });
+    assert.equal(res.status, 503);
+    assert.equal(res.body.details.code, 'ai_unavailable');
+  });
+
+  test('la logique IA du serveur est identique à celle de la Cloud Function', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const server = await readFile(new URL('../src/services/ai_refine.js', import.meta.url), 'utf8');
+    const functions = await readFile(
+      new URL('../../functions/src/refine.js', import.meta.url),
+      'utf8',
+    );
+    assert.equal(server.replace(/\r\n/g, '\n'), functions.replace(/\r\n/g, '\n'));
   });
 });

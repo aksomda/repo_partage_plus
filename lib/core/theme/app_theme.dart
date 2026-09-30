@@ -56,7 +56,13 @@ abstract final class AppTheme {
       borderRadius: BorderRadius.circular(radius),
     );
     const buttonPadding = EdgeInsets.symmetric(horizontal: 24, vertical: 14);
-    const buttonText = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
+    // Styles dérivés de la typographie Material : ils gardent la police du
+    // thème (un TextStyle « nu » remplacerait la police par celle du système).
+    final text = ThemeData(colorScheme: colorScheme).textTheme;
+    final buttonText = text.labelLarge!.copyWith(
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+    );
 
     OutlineInputBorder inputBorder(Color color, [double width = 1]) =>
         OutlineInputBorder(
@@ -67,14 +73,14 @@ abstract final class AppTheme {
     return ThemeData(
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.background,
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0.5,
         centerTitle: false,
-        titleTextStyle: TextStyle(
+        titleTextStyle: text.titleLarge!.copyWith(
           color: AppColors.text,
           fontSize: 18,
           fontWeight: FontWeight.w700,
@@ -121,7 +127,7 @@ abstract final class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: AppColors.primary,
-          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          textStyle: text.labelLarge!.copyWith(fontWeight: FontWeight.w600),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -141,8 +147,11 @@ abstract final class AppTheme {
         backgroundColor: AppColors.surface,
         selectedColor: AppColors.primary,
         secondarySelectedColor: AppColors.primary,
-        labelStyle: const TextStyle(color: AppColors.text, fontSize: 13),
-        secondaryLabelStyle: const TextStyle(color: Colors.white),
+        labelStyle: text.bodyMedium!.copyWith(
+          color: AppColors.text,
+          fontSize: 13,
+        ),
+        secondaryLabelStyle: text.bodyMedium!.copyWith(color: Colors.white),
         side: const BorderSide(color: AppColors.border),
         shape: const StadiumBorder(),
         showCheckmark: false,

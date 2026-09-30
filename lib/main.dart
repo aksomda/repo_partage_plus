@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/app.dart';
+import 'package:repo_partage_plus/core/maps/offline_tiles.dart';
 import 'package:repo_partage_plus/firebase_options.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
@@ -25,6 +26,9 @@ Future<void> main() async {
   } catch (error) {
     debugPrint('Firebase indisponible : $error');
   }
+
+  // Cache persistant des tuiles : la carte reste lisible hors ligne.
+  await initMapCache();
 
   final notifications = LocalNotifications();
   try {

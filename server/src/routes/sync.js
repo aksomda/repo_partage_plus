@@ -12,13 +12,32 @@ export const syncRouter = Router();
 /** Nombre maximal d'offres disponibles copiées sur l'appareil. */
 const MAX_OFFERS = 500;
 
+const CATEGORIES_SQL = `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
+  FROM categories c LEFT JOIN impact_factors f ON f.category_id = c.id
+  ORDER BY c.name`;
+
+/**
+ * Instantané public pour les visiteurs sans compte : catégories et offres
+ * disponibles, copiées sur l'appareil pour chercher et filtrer hors ligne.
+ */
+syncRouter.get('/public', async (req, res) => {
+  const [categories, offers] = await Promise.all([
+    query(CATEGORIES_SQL),
+    query(`${OFFER_SELECT} WHERE ${OFFER_AVAILABLE} ORDER BY o.expiry_date ASC LIMIT ?`, [
+      MAX_OFFERS,
+    ]),
+  ]);
+  res.json({ server_time: new Date().toISOString(), categories, offers });
+});
+
 /**
  * Instantané de toutes les données utiles à l'utilisateur, stocké tel quel
  * par l'application pour fonctionner hors ligne (une seule requête).
  */
 syncRouter.get('/', authenticate, async (req, res) => {
   const userId = req.user.id;
-  const isDonor = req.user.role === 'donor';
+  // Tout le monde peut publier : publications et réservations reçues pour tous.
+  const isDonor = req.user.role !== 'admin';
   const isAdmin = req.user.role === 'admin';
 
   const [

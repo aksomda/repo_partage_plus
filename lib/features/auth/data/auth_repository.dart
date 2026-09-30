@@ -86,21 +86,26 @@ class AuthRepository {
   /// Crée le compte Firebase puis le profil. Le compte reste inactif jusqu'à
   /// la saisie du code envoyé par e-mail ([verifyEmail]).
   Future<void> register(Registration data) async {
-    final (idToken, createdNow) = await _firebaseAccount(
-      data.email,
-      data.password,
-    );
+    final String idToken;
+    final bool createdNow;
+    try {
+      (idToken, createdNow) = await _firebaseAccount(data.email, data.password);
+    } on FirebaseAuthFailure catch (error) {
+      if (error.code != 'not-configured') rethrow;
+      // Sans Firebase (ex. Windows/Linux non configuré) : compte local,
+      // mot de passe haché et enregistré dans MySQL par l'API.
+      await _post(ApiEndpoints.register, {
+        'email': data.email,
+        'password': data.password,
+        ..._profile(data),
+      });
+      return;
+    }
 
     try {
       await _post(ApiEndpoints.register, {
         'id_token': idToken,
-        'actor_id': data.actorId,
-        'last_name': data.lastName,
-        'first_name': data.firstName,
-        'gender': data.gender,
-        'age': data.age,
-        'phone': data.phone,
-        'association': ?data.association,
+        ..._profile(data),
       });
     } catch (_) {
       // Pas de compte Firebase orphelin si le profil n'a pas été enregistré.
@@ -112,6 +117,16 @@ class AuthRepository {
       await _firebase.signOut();
     }
   }
+
+  Map<String, Object?> _profile(Registration data) => {
+    'actor_id': data.actorId,
+    'last_name': data.lastName,
+    'first_name': data.firstName,
+    'gender': data.gender,
+    'age': data.age,
+    'phone': data.phone,
+    'association': ?data.association,
+  };
 
   /// Jeton du compte Firebase, et true s'il vient d'être créé.
   Future<(String, bool)> _firebaseAccount(String email, String password) async {

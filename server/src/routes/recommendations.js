@@ -2,7 +2,7 @@ import { Router } from 'express';
 
 import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
-import { DISTANCE_KM, OFFER_AVAILABLE } from '../services/offers.js';
+import { DISTANCE_KM, OFFER_AVAILABLE, DONOR_NAME, PUBLISHER_TYPE } from '../services/offers.js';
 
 export const recommendationsRouter = Router();
 
@@ -22,12 +22,14 @@ recommendationsRouter.get('/', authenticate, async (req, res) => {
   const distanceParams = hasPosition ? [me.latitude, me.longitude, me.latitude] : [];
 
   const offers = await query(
-    `SELECT o.*, c.name AS category_name, u.name AS donor_name,
+    `SELECT o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
+            o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone,
             COALESCE(pref.score, 0) AS affinity,
             ${distance} AS distance_km
      FROM offers o
      JOIN categories c ON c.id = o.category_id
-     JOIN users u ON u.id = o.donor_id
+     LEFT JOIN users u ON u.id = o.donor_id
+     LEFT JOIN actors pa ON pa.id = u.actor_id
      LEFT JOIN (
        SELECT o2.category_id, COUNT(*) AS score
        FROM reservations r2
@@ -35,7 +37,7 @@ recommendationsRouter.get('/', authenticate, async (req, res) => {
        WHERE r2.beneficiary_id = ? AND r2.status <> 'cancelled'
        GROUP BY o2.category_id
      ) pref ON pref.category_id = o.category_id
-     WHERE ${OFFER_AVAILABLE} AND o.donor_id <> ?
+     WHERE ${OFFER_AVAILABLE} AND (o.donor_id IS NULL OR o.donor_id <> ?)
      ORDER BY affinity DESC, ${hasPosition ? 'distance_km ASC,' : ''} o.expiry_date ASC
      LIMIT 20`,
     [...distanceParams, req.user.id, req.user.id],

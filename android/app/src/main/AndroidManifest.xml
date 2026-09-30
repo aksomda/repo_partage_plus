@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- API backend -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Préférences dictées (recommandations). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- geolocator : offres à proximité -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
@@ -58,6 +60,26 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- OsmAnd (gratuit / OsmAnd+) : itinéraire hors ligne vers le retrait. -->
+        <package android:name="net.osmand"/>
+        <package android:name="net.osmand.plus"/>
+        <!-- Autres applications de cartes (geo:) et installation depuis le Store. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
+        <!-- Reconnaissance vocale du système (speech_to_text). -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="market"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
         </intent>
     </queries>
 </manifest>
