@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../offers/domain/entities/offer.dart';
 import '../../../offers/presentation/pages/offer_detail_page.dart';
 import '../../../offers/presentation/widgets/offer_card.dart';
+import '../../../recommendations/domain/services/recommendation_score_service.dart';
 import '../../data/mock_offers.dart';
 import '../../domain/offer_filters.dart';
 
@@ -15,6 +16,16 @@ class DiscoveryPage extends StatefulWidget {
 
 class _DiscoveryPageState extends State<DiscoveryPage> {
   final TextEditingController _searchController = TextEditingController();
+
+  final RecommendationScoreService _recommendationService =
+      RecommendationScoreService();
+
+  final UserPreferences _preferences = const UserPreferences(
+    favoriteCategories: ['Boulangerie', 'Fruits & légumes', 'Plats cuisinés'],
+    preferredTypes: [OfferType.free, OfferType.discounted],
+    maxDistanceKm: 3,
+    maxPrice: 2000,
+  );
 
   OfferFilters _filters = const OfferFilters();
 
@@ -29,7 +40,18 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
     final offers = _filterOffers();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Découvrir')),
+      appBar: AppBar(
+        title: const Text('Découvrir'),
+        actions: [
+          IconButton(
+            onPressed: () {
+              _showAiInformation();
+            },
+            icon: const Icon(Icons.auto_awesome_outlined),
+            tooltip: 'Comment fonctionne l’IA ?',
+          ),
+        ],
+      ),
       body: Column(
         children: [
           _buildSearchBar(),
@@ -150,9 +172,62 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
       );
     }
 
+    final recommendations = _recommendationService.rank(
+      offers: offers,
+      preferences: _preferences,
+    );
+
+    final recommendedOffers = recommendations.take(3).toList();
+
+    final recommendedIds = recommendedOffers
+        .map((recommendation) => recommendation.offer.id)
+        .toSet();
+
+    final otherOffers = offers
+        .where((offer) => !recommendedIds.contains(offer.id))
+        .toList();
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
+        if (recommendedOffers.isNotEmpty) ...[
+          Row(
+            children: [
+              Text(
+                'Recommandé pour vous',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.auto_awesome,
+                color: Colors.deepPurple,
+                size: 21,
+              ),
+              const Spacer(),
+            ],
+          ),
+          Text(
+            'Selon vos préférences, la distance, le prix et l’urgence.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          ...recommendedOffers.map(
+            (recommendation) => OfferCard(
+              offer: recommendation.offer,
+              recommendationScore: recommendation.score,
+              recommendationReasons: recommendation.reasons,
+              onTap: () {
+                _openOfferDetail(
+                  recommendation.offer,
+                  recommendation: recommendation,
+                );
+              },
+            ),
+          ),
+          const Divider(height: 32),
+        ],
         Text(
           '${offers.length} offre(s) disponible(s)',
           style: Theme.of(
@@ -160,7 +235,7 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
           ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 12),
-        ...offers.map(
+        ...otherOffers.map(
           (offer) => OfferCard(
             offer: offer,
             onTap: () {
@@ -394,10 +469,36 @@ class _DiscoveryPageState extends State<DiscoveryPage> {
     );
   }
 
-  void _openOfferDetail(Offer offer) {
+  void _openOfferDetail(Offer offer, {RecommendationResult? recommendation}) {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => OfferDetailPage(offer: offer)),
+    );
+  }
+
+  void _showAiInformation() {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          icon: const Icon(Icons.auto_awesome, color: Colors.deepPurple),
+          title: const Text('Recommandation Partage+'),
+          content: const Text(
+            'Les offres sont classées selon vos catégories favorites, '
+            'vos préférences de type d’offre, la distance, le prix et '
+            'l’urgence liée au risque de gaspillage. '
+            'Le score est explicable et ne prend aucune décision automatique à votre place.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text('Compris'),
+            ),
+          ],
+        );
+      },
     );
   }
 }

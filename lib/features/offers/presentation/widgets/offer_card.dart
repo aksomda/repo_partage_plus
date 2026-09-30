@@ -5,8 +5,16 @@ import '../../domain/entities/offer.dart';
 class OfferCard extends StatelessWidget {
   final Offer offer;
   final VoidCallback onTap;
+  final double? recommendationScore;
+  final List<String> recommendationReasons;
 
-  const OfferCard({super.key, required this.offer, required this.onTap});
+  const OfferCard({
+    super.key,
+    required this.offer,
+    required this.onTap,
+    this.recommendationScore,
+    this.recommendationReasons = const [],
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -48,13 +56,24 @@ class OfferCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          offer.title,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                offer.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            if (recommendationScore != null) ...[
+              const SizedBox(width: 8),
+              _RecommendationScoreBadge(score: recommendationScore!),
+            ],
+          ],
         ),
         const SizedBox(height: 5),
         Text(
@@ -85,6 +104,30 @@ class OfferCard extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         _buildRiskBadge(),
+        if (recommendationReasons.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: recommendationReasons.take(2).map((reason) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.deepPurple.withAlpha(18),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Text(
+                  reason,
+                  style: const TextStyle(
+                    color: Colors.deepPurple,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
       ],
     );
   }
@@ -128,5 +171,30 @@ class OfferCard extends StatelessWidget {
     }
 
     return '${distanceKm.toStringAsFixed(1)} km';
+  }
+}
+
+class _RecommendationScoreBadge extends StatelessWidget {
+  final double score;
+
+  const _RecommendationScoreBadge({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.deepPurple.withAlpha(24),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        '${score.round()} / 100',
+        style: const TextStyle(
+          color: Colors.deepPurple,
+          fontWeight: FontWeight.bold,
+          fontSize: 11,
+        ),
+      ),
+    );
   }
 }
