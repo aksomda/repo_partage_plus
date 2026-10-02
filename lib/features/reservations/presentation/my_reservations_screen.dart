@@ -17,6 +17,8 @@ import 'package:repo_partage_plus/features/reservations/data/reservations_reposi
 /// Écran des réservations adaptatif selon le rôle :
 /// - Donateur (Commerçant / Restaurant) : TabBar avec "Commandes reçues" et "Mes réservations".
 /// - Bénéficiaire / Particulier : Liste directe de ses propres réservations.
+/// Réservations : celles du compte (historique complet) et celles faites
+/// sans compte sur cet appareil.
 class MyReservationsScreen extends ConsumerStatefulWidget {
   const MyReservationsScreen({super.key});
 
