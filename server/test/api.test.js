@@ -21,6 +21,8 @@ const { flushFirestoreMirror, setFirestoreStore } = await import(
 const { config } = await import('../src/config.js');
 const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js');
 const { HttpError } = await import('../src/http/errors.js');
+const { fillMonths, MONTHS } = await import('../src/routes/impact.js');
+const { isDatabaseUnavailable } = await import('../src/db/pool.js');
 
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
 const firebaseCalls = [];
@@ -50,6 +52,9 @@ setFirestoreStore({
   },
   async listIds(collection) {
     return [...firestoreCollection(collection).keys()].map(String);
+  },
+  async readDoc(collection, id) {
+    return firestoreCollection(collection).get(Number(id)) ?? null;
   },
   async readState() {
     return null;
@@ -114,6 +119,26 @@ describe('santé et référentiels', () => {
   test('route inconnue : 404', async () => {
     const res = await api.get('/api/inexistant');
     assert.equal(res.status, 404);
+  });
+});
+
+describe('impact : calculs', () => {
+  test('les mois sans retrait sont présents, à zéro', () => {
+    const now = new Date(Date.UTC(2026, 0, 15));
+    const months = fillMonths([{ month: '2025-03', pickups: 2, food_kg: 1.25, co2_kg: 0, meals: 3 }], now);
+    assert.equal(months.length, 12);
+    assert.equal(months[0].month, '2025-02');
+    assert.equal(months.at(-1).month, '2026-01');
+    assert.equal(months[1].pickups, 2);
+    assert.equal(months[1].food_kg, 1.3);
+    assert.equal(months[2].pickups, 0);
+  });
+
+  test('erreurs de connexion MySQL reconnues', () => {
+    assert.ok(isDatabaseUnavailable({ code: 'ECONNREFUSED' }));
+    assert.ok(isDatabaseUnavailable({ code: 'PROTOCOL_CONNECTION_LOST' }));
+    assert.ok(!isDatabaseUnavailable({ code: 'ER_DUP_ENTRY' }));
+    assert.ok(!isDatabaseUnavailable(null));
   });
 });
 
@@ -427,6 +452,63 @@ describe('parcours offre → réservation → retrait', () => {
     const impact = await api.get('/api/impact/me').set(as('beneficiary'));
     assert.equal(impact.body.pickups, 1);
     assert.equal(impact.body.food_kg, 1);
+  });
+
+  test('tableau de bord : compteurs, 12 mois complets, catégories, indicateurs sociaux', async () => {
+    const res = await api.get('/api/impact/me/dashboard').set(as('beneficiary'));
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.source, 'mysql');
+    assert.equal(res.body.impact.pickups, 1);
+    // Produits = unités retirées (la réservation du test en compte 2).
+    assert.equal(res.body.impact.items, 2);
+
+    // 12 mois consécutifs, le dernier étant le mois en cours.
+    const months = res.body.impact_monthly;
+    assert.equal(months.length, MONTHS);
+    assert.equal(months.at(-1).month, new Date().toISOString().slice(0, 7));
+    assert.equal(months.at(-1).pickups, 1);
+    assert.equal(months.reduce((sum, m) => sum + m.pickups, 0), 1);
+
+    assert.equal(res.body.impact_by_category.length, 1);
+    assert.equal(res.body.impact_by_category[0].food_kg, 1);
+
+    // Bénéficiaire : 1 retrait reçu d'1 donateur. Donateur : 1 personne aidée.
+    assert.equal(res.body.impact_social.pickups_received, 1);
+    assert.equal(res.body.impact_social.donors_met, 1);
+    const donor = await api.get('/api/impact/me/dashboard').set(as('donor'));
+    assert.equal(donor.body.impact_social.people_helped, 1);
+    assert.equal(donor.body.impact_social.pickups_given, 1);
+    assert.ok(donor.body.impact_social.offers_shared >= 1);
+
+    // Même contenu dans l'instantané hors ligne.
+    const sync = await api.get('/api/sync').set(as('beneficiary'));
+    for (const key of ['impact', 'impact_monthly', 'impact_by_category', 'impact_social']) {
+      assert.deepEqual(sync.body[key], res.body[key], key);
+    }
+  });
+
+  test('MySQL indisponible : tableau de bord servi depuis la copie Firestore', async () => {
+    await api.get('/api/impact/me/dashboard').set(as('beneficiary'));
+    await flushFirestoreMirror();
+
+    const realQuery = pool.query;
+    pool.query = async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    };
+    try {
+      const res = await api.get('/api/impact/me/dashboard').set(as('beneficiary'));
+      assert.equal(res.status, 200, res.text);
+      assert.equal(res.body.source, 'firestore');
+      assert.equal(res.body.impact.pickups, 1);
+
+      // Les autres routes répondent proprement au lieu de planter.
+      const offers = await api.get('/api/offers').set(as('beneficiary'));
+      assert.equal(offers.status, 503);
+      assert.match(offers.body.error, /indisponible/);
+    } finally {
+      pool.query = realQuery;
+    }
+    assert.equal((await api.get('/health')).status, 200);
   });
 
   test('les recommandations privilégient la catégorie déjà réservée', async () => {

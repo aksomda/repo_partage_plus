@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,10 +14,17 @@ import 'package:repo_partage_plus/core/storage/local_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _keepRunningOnErrors();
 
   // Seul le strict nécessaire au premier écran est attendu (base locale,
-  // session) : l'application démarre vite, même sans réseau.
-  final (database, _) = await (openLocalDatabase(), initMapCache()).wait;
+  // session) : l'application démarre vite, même sans réseau. Le cache de
+  // cartes est facultatif : son échec n'empêche pas de démarrer.
+  final (database, _) = await (
+    openLocalDatabase(),
+    initMapCache().catchError((Object error) {
+      debugPrint('Cache de cartes indisponible : $error');
+    }),
+  ).wait;
   final store = LocalStore(database);
   final token = await store.readToken();
 
@@ -40,4 +48,32 @@ Future<void> main() async {
       child: const RepasPartageApp(),
     ),
   );
+}
+
+/// Une erreur imprévue (réseau, Firebase, serveur…) est journalisée sans
+/// fermer l'application ; un widget en erreur affiche un message sobre au
+/// lieu de l'écran rouge (en version publiée).
+void _keepRunningOnErrors() {
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('Erreur d’affichage : ${details.exceptionAsString()}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Erreur non gérée (l’application continue) : $error');
+    return true;
+  };
+  if (kReleaseMode) {
+    ErrorWidget.builder = (details) => const Material(
+      color: Colors.transparent,
+      child: Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Text(
+            'Contenu momentanément indisponible',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ),
+    );
+  }
 }

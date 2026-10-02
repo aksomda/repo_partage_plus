@@ -43,6 +43,9 @@ const BATCH_SIZE = 500;
 
 const STATE = { collection: '_mirror', doc: 'state' };
 
+/** Tableaux de bord d'impact calculés, copie de secours (hors tables MySQL). */
+const DASHBOARDS = 'impact_dashboards';
+
 function firestore() {
   const app = firebaseApp();
   if (!app) throw new Error('Firebase non configuré (FIREBASE_PROJECT_ID)');
@@ -70,6 +73,10 @@ const realStore = {
   async listIds(collection) {
     const refs = await firestore().collection(collection).listDocuments();
     return refs.map((ref) => ref.id);
+  },
+  async readDoc(collection, id) {
+    const snap = await firestore().collection(collection).doc(String(id)).get();
+    return snap.exists ? snap.data() : null;
   },
   async readState() {
     const snap = await firestore().collection(STATE.collection).doc(STATE.doc).get();
@@ -147,6 +154,35 @@ export const firestoreMirror = {
     queue = queue
       .then(() => store.remove(table, ids))
       .catch((error) => console.error('Firestore : suppression non faite :', error.message));
+  },
+
+  /**
+   * Garde une copie du tableau de bord d'impact calculé (collection
+   * impact_dashboards, id = id de l'utilisateur), en arrière-plan.
+   */
+  saveDashboard(userId, dashboard) {
+    if (!enabled) return;
+    queue = queue
+      .then(() => store.write(DASHBOARDS, [{ id: userId, ...dashboard }]))
+      .catch((error) => console.error('Firestore : impact non copié :', error.message));
+  },
+
+  /** Dernier tableau de bord copié, ou null (Firestore indisponible ou vide). */
+  async readDashboard(userId) {
+    if (!enabled) return null;
+    const doc = await store.readDoc(DASHBOARDS, userId);
+    if (!doc) return null;
+    const { id: _id, ...dashboard } = doc;
+    return dashboard;
+  },
+
+  /**
+   * Copie d'un compte, pour vérifier son statut quand MySQL est
+   * indisponible. null : pas de copie, ou Firestore indisponible.
+   */
+  async readUser(userId) {
+    if (!enabled) return null;
+    return store.readDoc('users', userId);
   },
 
   /**

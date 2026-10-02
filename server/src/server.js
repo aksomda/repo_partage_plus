@@ -3,6 +3,12 @@ import { config } from './config.js';
 import { firestoreMirror } from './services/firestore_mirror.js';
 import { runScheduledJobs } from './services/jobs.js';
 
+// Une erreur oubliée dans une tâche de fond (MySQL ou Firebase injoignable…)
+// est journalisée au lieu d'arrêter le serveur.
+process.on('unhandledRejection', (reason) => {
+  console.error('Erreur non gérée (le serveur continue) :', reason?.message ?? reason);
+});
+
 app.listen(config.port, () => {
   console.log(`API démarrée sur http://localhost:${config.port}`);
   console.log(

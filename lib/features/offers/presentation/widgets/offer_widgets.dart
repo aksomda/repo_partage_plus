@@ -10,13 +10,26 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 String formatPrice(num? value) {
   final price = (value ?? 0).round();
   if (price == 0) return 'Gratuit';
-  final digits = price.toString();
-  final buffer = StringBuffer();
+  return '${formatNumber(price)} F CFA';
+}
+
+/// Nombre à la française : 1234.5 → « 1 234,5 ». Les décimales nulles
+/// sont retirées (12.0 → « 12 »).
+String formatNumber(num? value, {int decimals = 0}) {
+  final fixed = (value ?? 0).toDouble().toStringAsFixed(decimals);
+  final negative = fixed.startsWith('-');
+  final parts = (negative ? fixed.substring(1) : fixed).split('.');
+  final digits = parts[0];
+  final buffer = StringBuffer(negative ? '-' : '');
   for (var i = 0; i < digits.length; i++) {
     if (i > 0 && (digits.length - i) % 3 == 0) buffer.write(' ');
     buffer.write(digits[i]);
   }
-  return '$buffer F CFA';
+  final fraction = parts.length > 1
+      ? parts[1].replaceAll(RegExp(r'0+$'), '')
+      : '';
+  if (fraction.isNotEmpty) buffer.write(',$fraction');
+  return buffer.toString();
 }
 
 String formatDistance(num? km) {

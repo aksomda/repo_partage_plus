@@ -56,6 +56,10 @@ const realGateway = {
       return { uid: decoded.uid, email: decoded.email?.toLowerCase() ?? null };
     } catch (error) {
       if (error instanceof HttpError) throw error;
+      // Firebase injoignable (réseau, panne) : ce n'est pas la session qui est en cause.
+      if (/network|internal-error|unavailable|timeout/i.test(error?.code ?? '')) {
+        throw new HttpError(503, 'Firebase momentanément indisponible : réessayez plus tard');
+      }
       throw new HttpError(401, 'Session Firebase invalide ou expirée');
     }
   },

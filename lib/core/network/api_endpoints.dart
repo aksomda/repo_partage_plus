@@ -46,6 +46,7 @@ abstract final class ApiEndpoints {
 
   // Impact et recommandations
   static const myImpact = '/impact/me';
+  static const myImpactDashboard = '/impact/me/dashboard';
   static const globalImpact = '/impact/global';
   static const myImpactByCategory = '/impact/me/by-category';
   static const myImpactMonthly = '/impact/me/monthly';

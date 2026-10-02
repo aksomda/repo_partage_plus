@@ -50,6 +50,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           if (loggedIn)
             IconButton(
+              tooltip: 'Mon impact',
+              icon: const Icon(Icons.eco_outlined),
+              onPressed: () => context.push(AppRoutes.impact),
+            ),
+          if (loggedIn)
+            IconButton(
               tooltip: 'Notifications',
               icon: const Icon(Icons.notifications_none),
               onPressed: () => context.push(AppRoutes.notifications),
@@ -121,6 +127,20 @@ class _Banner extends StatelessWidget {
                 icon: const Icon(Icons.add),
                 label: const Text('Publier une offre'),
               ),
+              if (loggedIn)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                  ),
+                  onPressed: () => context.push(AppRoutes.impact),
+                  icon: const Icon(Icons.eco_outlined),
+                  label: const Text('Mon impact'),
+                ),
               if (!loggedIn)
                 OutlinedButton(
                   style: OutlinedButton.styleFrom(
