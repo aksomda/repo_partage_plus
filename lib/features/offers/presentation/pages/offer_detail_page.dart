@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/entities/offer.dart';
+import '../../../recommendations/domain/services/recommendation_score_service.dart';
 
 class OfferDetailPage extends StatefulWidget {
   final Offer offer;
+  final RecommendationResult? recommendation;
 
-  const OfferDetailPage({super.key, required this.offer});
+  const OfferDetailPage({super.key, required this.offer, this.recommendation});
 
   @override
   State<OfferDetailPage> createState() => _OfferDetailPageState();
@@ -45,6 +47,10 @@ class _OfferDetailPageState extends State<OfferDetailPage> {
           const SizedBox(height: 20),
           _buildMerchantCard(),
           const SizedBox(height: 20),
+          if (widget.recommendation != null) ...[
+            _buildRecommendationCard(),
+            const SizedBox(height: 20),
+          ],
           _buildPickupSlots(),
           const SizedBox(height: 20),
           _buildQuantitySelector(),
@@ -55,6 +61,49 @@ class _OfferDetailPageState extends State<OfferDetailPage> {
           const SizedBox(height: 28),
           _buildReserveButton(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildRecommendationCard() {
+    final recommendation = widget.recommendation!;
+    final percent = (recommendation.score.clamp(0, 100)).round();
+
+    return Card(
+      color: Colors.green.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.thumb_up_alt_outlined, color: Colors.green),
+                const SizedBox(width: 8),
+                const Text(
+                  'Offre recommandée',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Text(
+                  '$percent%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: recommendation.reasons
+                  .map((reason) => Chip(label: Text(reason)))
+                  .toList(),
+            ),
+          ],
+        ),
       ),
     );
   }
