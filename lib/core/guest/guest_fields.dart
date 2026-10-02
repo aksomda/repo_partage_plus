@@ -83,39 +83,46 @@ class GuestFields extends ConsumerWidget {
             ],
           ),
         ),
-        LabeledField(
-          label: 'Nom',
-          child: TextFormField(
-            controller: controller.lastName,
-            textCapitalization: TextCapitalization.words,
-            textInputAction: TextInputAction.next,
-            validator: _name,
-          ),
-        ),
-        LabeledField(
-          label: 'Prénom',
-          child: TextFormField(
-            controller: controller.firstName,
-            textCapitalization: TextCapitalization.words,
-            textInputAction: TextInputAction.next,
-            validator: _name,
-          ),
-        ),
-        LabeledField(
-          label: 'Téléphone',
-          child: TextFormField(
-            controller: controller.phone,
-            keyboardType: TextInputType.phone,
-            textInputAction: TextInputAction.next,
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
-            ],
-            decoration: const InputDecoration(hintText: '+226 70 00 00 00'),
-            validator: (value) =>
-                RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(value?.trim() ?? '')
-                ? null
-                : 'Numéro invalide',
-          ),
+        FieldGrid(
+          children: [
+            LabeledField(
+              label: 'Nom',
+              required: true,
+              child: TextFormField(
+                controller: controller.lastName,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.next,
+                validator: _name,
+              ),
+            ),
+            LabeledField(
+              label: 'Prénom',
+              required: true,
+              child: TextFormField(
+                controller: controller.firstName,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.next,
+                validator: _name,
+              ),
+            ),
+            LabeledField(
+              label: 'Téléphone',
+              required: true,
+              child: TextFormField(
+                controller: controller.phone,
+                keyboardType: TextInputType.phone,
+                textInputAction: TextInputAction.next,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
+                ],
+                decoration: const InputDecoration(hintText: '+226 70 00 00 00'),
+                validator: (value) =>
+                    RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(value?.trim() ?? '')
+                    ? null
+                    : 'Numéro invalide',
+              ),
+            ),
+          ],
         ),
       ],
     );

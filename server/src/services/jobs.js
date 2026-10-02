@@ -1,4 +1,5 @@
 import { transaction } from '../db/pool.js';
+import { firestoreMirror } from './firestore_mirror.js';
 import { notify } from './notifications.js';
 
 /** Délai avant le début du créneau à partir duquel on envoie le rappel. */
@@ -102,7 +103,7 @@ async function purgeIdempotencyKeys(conn) {
 
 /** Exécute toutes les tâches ; sans effet si rien n'est à traiter. */
 export async function runScheduledJobs() {
-  return transaction(async (conn) => {
+  const result = await transaction(async (conn) => {
     await purgeIdempotencyKeys(conn);
     return {
       pickup_reminders: await sendPickupReminders(conn),
@@ -110,4 +111,7 @@ export async function runScheduledJobs() {
       expired_offers: await expireOffers(conn),
     };
   });
+  // Offres expirées, rappels et notifications créés par ces tâches.
+  firestoreMirror.changed();
+  return result;
 }

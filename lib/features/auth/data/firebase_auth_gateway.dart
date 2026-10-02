@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:repo_partage_plus/core/firebase/firebase_init.dart';
 import 'package:repo_partage_plus/core/firebase/firebase_rest.dart';
 
 /// Erreur d'authentification Firebase, avec un message lisible.
@@ -76,10 +77,12 @@ class FirebaseAuthGateway implements AuthGateway {
 
   @override
   Future<void> signOut() async {
+    await ensureFirebase();
     if (Firebase.apps.isNotEmpty) await FirebaseAuth.instance.signOut();
   }
 
   Future<T> _run<T>(Future<T> Function() action) async {
+    await ensureFirebase();
     try {
       return await action();
     } on FirebaseAuthException catch (error) {

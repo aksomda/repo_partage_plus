@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:repo_partage_plus/core/network/api_config.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 
@@ -83,7 +84,54 @@ Color categoryColor(Object? id) {
   return palette[(id is int ? id : 0) % palette.length];
 }
 
-/// Vignette de l'offre (pas de photo : pictogramme de la catégorie).
+/// URL de la photo de l'offre, ou null si elle n'en a pas.
+String? offerPhotoUrl(Json offer) {
+  final path = offer['photo_path'] as String?;
+  return path == null ? null : '${ApiConfig.baseUrl}$path';
+}
+
+/// Photo de l'offre ; sans photo (ou hors ligne), pictogramme de la catégorie.
+class OfferPhoto extends StatelessWidget {
+  const OfferPhoto({
+    super.key,
+    required this.offer,
+    required this.iconSize,
+    this.width,
+    this.height,
+  });
+
+  final Json offer;
+  final double iconSize;
+  final double? width;
+  final double? height;
+
+  @override
+  Widget build(BuildContext context) {
+    final placeholder = Container(
+      width: width,
+      height: height,
+      color: categoryColor(offer['category_id']),
+      child: Icon(
+        categoryIcon(offer['category_icon']),
+        size: iconSize,
+        color: AppColors.primary,
+      ),
+    );
+    final url = offerPhotoUrl(offer);
+    if (url == null) return placeholder;
+    return Image.network(
+      url,
+      width: width,
+      height: height,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => placeholder,
+      loadingBuilder: (_, child, progress) =>
+          progress == null ? child : placeholder,
+    );
+  }
+}
+
+/// Vignette de l'offre : sa photo, ou le pictogramme de la catégorie.
 class OfferThumbnail extends StatelessWidget {
   const OfferThumbnail({super.key, required this.offer, this.size = 72});
 
@@ -92,17 +140,13 @@ class OfferThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: categoryColor(offer['category_id']),
-        borderRadius: BorderRadius.circular(AppTheme.radius),
-      ),
-      child: Icon(
-        categoryIcon(offer['category_icon']),
-        size: size * 0.45,
-        color: AppColors.primary,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppTheme.radius),
+      child: OfferPhoto(
+        offer: offer,
+        width: size,
+        height: size,
+        iconSize: size * 0.45,
       ),
     );
   }

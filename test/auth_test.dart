@@ -101,6 +101,43 @@ void main() {
     });
 
     test(
+      'compte existant : lien de réinitialisation envoyé, sans suppression',
+      () async {
+        firebase.accounts['awa@test.local'] = 'autre-motdepasse1';
+
+        await expectLater(
+          repository().register(registration),
+          throwsA(
+            isA<AccountExistsException>()
+                .having((e) => e.email, 'email', 'awa@test.local')
+                .having((e) => e.resetSent, 'resetSent', isTrue),
+          ),
+        );
+        expect(firebase.calls, contains('reset'));
+        expect(firebase.calls, isNot(contains('delete')));
+        expect(firebase.accounts, contains('awa@test.local'));
+      },
+    );
+
+    test(
+      'profil déjà enregistré (409 email_taken) : réinitialisation',
+      () async {
+        firebase.accounts['awa@test.local'] = 'motdepasse1';
+        server.handler = (request) async => jsonResponse(409, {
+          'error': 'Un compte existe déjà',
+          'details': {'code': 'email_taken'},
+        });
+
+        await expectLater(
+          repository().register(registration),
+          throwsA(isA<AccountExistsException>()),
+        );
+        expect(firebase.calls, contains('reset'));
+        expect(firebase.accounts, contains('awa@test.local'));
+      },
+    );
+
+    test(
       'inscription interrompue : reprise avec le compte Firebase existant',
       () async {
         firebase.accounts['awa@test.local'] = 'motdepasse1';

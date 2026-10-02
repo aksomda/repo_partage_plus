@@ -8,12 +8,20 @@ export const DONOR_NAME = `COALESCE(u.name, CONCAT(o.guest_first_name, ' ', o.gu
 export const PUBLISHER_TYPE = `CASE WHEN o.donor_id IS NULL THEN 'invite' ELSE COALESCE(pa.code, u.role) END`;
 
 /**
+ * Chemin de la photo, relatif à l'URL de l'API (NULL sans photo). Le
+ * paramètre `v` change à chaque nouvelle photo, pour les caches.
+ */
+export const PHOTO_PATH = `IF(o.photo_updated_at IS NULL, NULL,
+  CONCAT('/offers/', o.id, '/photo?v=', UNIX_TIMESTAMP(o.photo_updated_at)))`;
+
+/**
  * `is_guest` : publiée sans compte ; `contact_phone` : téléphone de l'invité,
  * seul moyen de le joindre (celui d'un compte n'est donné qu'après réservation).
  */
 export const OFFER_SELECT = `
   SELECT o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
-         o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone
+         o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone,
+         ${PHOTO_PATH} AS photo_path
   FROM offers o
   JOIN categories c ON c.id = o.category_id
   LEFT JOIN users u ON u.id = o.donor_id

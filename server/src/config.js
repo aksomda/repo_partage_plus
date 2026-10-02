@@ -38,6 +38,15 @@ export const config = {
     // Contenu JSON du compte de service, brut ou encodé en base64.
     serviceAccount: env.FIREBASE_SERVICE_ACCOUNT || null,
   },
+  // Copie des offres MySQL dans Firestore (MySQL reste la référence).
+  // Active dès qu'un compte de service est fourni ; FIRESTORE_MIRROR=true
+  // force l'activation (identifiants par défaut de Google Cloud).
+  firestore: {
+    enabled:
+      env.FIRESTORE_MIRROR === 'true' ||
+      (env.FIRESTORE_MIRROR !== 'false' && Boolean(env.FIREBASE_SERVICE_ACCOUNT)),
+    databaseId: env.FIRESTORE_DATABASE_ID || '(default)',
+  },
   smtp: {
     host: env.SMTP_HOST || null,
     port: Number(env.SMTP_PORT || 587),
