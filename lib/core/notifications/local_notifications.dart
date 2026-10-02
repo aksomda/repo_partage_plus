@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +16,7 @@ import 'package:repo_partage_plus/core/storage/local_store.dart';
 class LocalNotifications {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
+  Future<void>? _initializing;
 
   static const _details = NotificationDetails(
     android: AndroidNotificationDetails(
@@ -29,7 +32,21 @@ class LocalNotifications {
   /// Types envoyés aussi par le serveur mais déjà programmés localement.
   static const _plannedLocally = {'pickup_reminder', 'expiry_soon'};
 
-  Future<void> init() async {
+  /// Peut être lancé sans attendre : les autres méthodes attendent
+  /// la fin de l'initialisation (dont la demande d'autorisation).
+  Future<void> init() => _initializing ??= _init();
+
+  /// true une fois init() terminé avec succès.
+  Future<bool> _whenReady() async {
+    try {
+      await _initializing;
+    } catch (_) {
+      // Échec déjà signalé par l'appelant de init().
+    }
+    return _ready;
+  }
+
+  Future<void> _init() async {
     if (kIsWeb) return;
     tzdata.initializeTimeZones();
     await _plugin.initialize(
@@ -38,16 +55,24 @@ class LocalNotifications {
         iOS: DarwinInitializationSettings(),
       ),
     );
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestNotificationsPermission();
     _ready = true;
+    // Pas attendu : les rappels se programment pendant que l'utilisateur
+    // répond à la demande d'autorisation.
+    unawaited(
+      _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission()
+          .catchError((Object error) {
+            debugPrint('Autorisation de notification : $error');
+            return null;
+          }),
+    );
   }
 
   Future<void> show(int id, String title, String body) async {
-    if (!_ready) return;
+    if (!await _whenReady()) return;
     await _plugin.show(
       id: id,
       title: title,
@@ -59,7 +84,7 @@ class LocalNotifications {
   /// Reprogramme les rappels à partir des données locales.
   /// Les rappels dont l'heure est passée sont affichés une seule fois.
   Future<void> reschedule(LocalStore store) async {
-    if (!_ready) return;
+    if (!await _whenReady()) return;
 
     final now = DateTime.now();
     final planned = ReminderPlanner.plan(

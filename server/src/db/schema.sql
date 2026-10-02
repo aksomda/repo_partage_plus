@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS associations (
   reviewed_by INT UNSIGNED NULL,
   reviewed_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_associations_user (user_id),
   KEY idx_associations_status (status),
   CONSTRAINT fk_associations_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS categories (
   name VARCHAR(80) NOT NULL,
   icon VARCHAR(50) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_categories_name (name)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
@@ -122,6 +124,8 @@ CREATE TABLE IF NOT EXISTS offers (
   address VARCHAR(255) NOT NULL,
   latitude DECIMAL(9, 6) NOT NULL,
   longitude DECIMAL(9, 6) NOT NULL,
+  -- Date de la photo (NULL : pas de photo) ; le fichier est dans offer_photos.
+  photo_updated_at DATETIME NULL,
   status ENUM('pending', 'published', 'rejected', 'reserved', 'completed', 'expired', 'cancelled')
     NOT NULL DEFAULT 'pending',
   moderation_reason VARCHAR(255) NULL,
@@ -139,6 +143,14 @@ CREATE TABLE IF NOT EXISTS offers (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- beneficiary_id NULL : réservation faite par un invité (guest_*).
+-- Photo d'une offre, gardée à part pour ne pas alourdir les listes.
+CREATE TABLE IF NOT EXISTS offer_photos (
+  offer_id INT UNSIGNED PRIMARY KEY,
+  mime VARCHAR(30) NOT NULL,
+  data MEDIUMBLOB NOT NULL,
+  CONSTRAINT fk_offer_photos_offer FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS reservations (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   offer_id INT UNSIGNED NOT NULL,
@@ -197,6 +209,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   data JSON NULL,
   read_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_notifications_user (user_id, read_at),
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

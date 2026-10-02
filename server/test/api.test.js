@@ -15,6 +15,9 @@ const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
 const { sentMails } = await import('../src/services/mailer.js');
+const { flushFirestoreMirror, setFirestoreStore } = await import(
+  '../src/services/firestore_mirror.js'
+);
 const { config } = await import('../src/config.js');
 const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js');
 const { HttpError } = await import('../src/http/errors.js');
@@ -33,6 +36,25 @@ setFirebaseGateway({
   async markEmailVerified(uid) {
     firebaseCalls.push(['verified', uid]);
   },
+});
+
+// Faux Firestore : documents gardés en mémoire, par collection puis par id.
+const firestoreDocs = {};
+const firestoreCollection = (name) => (firestoreDocs[name] ??= new Map());
+setFirestoreStore({
+  async write(collection, rows) {
+    for (const row of rows) firestoreCollection(collection).set(row.id, row);
+  },
+  async remove(collection, ids) {
+    for (const id of ids) firestoreCollection(collection).delete(Number(id));
+  },
+  async listIds(collection) {
+    return [...firestoreCollection(collection).keys()].map(String);
+  },
+  async readState() {
+    return null;
+  },
+  async writeState() {},
 });
 
 const fakeToken = (uid, email) => `fake:${uid}:${email}:${'x'.repeat(20)}`;
@@ -112,6 +134,36 @@ describe('authentification', () => {
     phone: '+226 70 00 00 00',
     actor_id: actors.particulier,
     ...overrides,
+  });
+
+  test('inscription copiée dans Firestore, sans le mot de passe', async () => {
+    const res = await api.post('/api/auth/register').send(
+      registration({
+        id_token: undefined,
+        email: 'copie.firestore@test.local',
+        password: 'motdepasse1',
+      }),
+    );
+    assert.equal(res.status, 201, res.text);
+    await flushFirestoreMirror();
+
+    const [{ id }] = await pool
+      .query('SELECT id FROM users WHERE email = ?', ['copie.firestore@test.local'])
+      .then(([rows]) => rows);
+    const doc = firestoreCollection('users').get(id);
+    assert.ok(doc, 'compte absent de Firestore');
+    assert.equal(doc.email, 'copie.firestore@test.local');
+    assert.equal(doc.first_name, 'Awa');
+    assert.equal(doc.status, 'pending');
+    assert.equal('password_hash' in doc, false);
+
+    // Toutes les tables métier sont copiées, jamais les secrets.
+    for (const table of ['actors', 'categories', 'impact_factors']) {
+      assert.ok(firestoreCollection(table).size > 0, table);
+    }
+    for (const secret of ['email_otps', 'guest_tokens', 'idempotency_keys']) {
+      assert.equal(firestoreDocs[secret], undefined, secret);
+    }
   });
 
   test("les acteurs proposés à l'inscription excluent l'administrateur", async () => {
@@ -424,6 +476,49 @@ describe('invités (sans compte) et paiement hors application', () => {
     assert.ok(res.body.categories.length >= 6);
     assert.ok(res.body.offers.length > 0);
     assert.equal(res.body.profile, undefined);
+  });
+
+  test('offre sans compte copiée dans Firestore, avec les colonnes MySQL', async () => {
+    const res = await api.post('/api/offers').send(offerBody({ guest, title: 'Copie Firestore' }));
+    assert.equal(res.status, 201, res.text);
+    await flushFirestoreMirror();
+
+    const doc = firestoreCollection('offers').get(res.body.id);
+    assert.ok(doc, 'offre absente de Firestore');
+    assert.equal(doc.title, 'Copie Firestore');
+    assert.equal(doc.donor_id, null);
+    assert.equal(doc.guest_first_name, 'Moussa');
+    assert.equal(doc.guest_last_name, 'Kaboré');
+    assert.equal(doc.guest_phone, guest.phone);
+    assert.equal(doc.status, 'pending');
+    assert.equal(doc.quantity_available, 4);
+
+    // La modération est répercutée sur la copie.
+    await approve(res.body.id);
+    await flushFirestoreMirror();
+    assert.equal(firestoreCollection('offers').get(res.body.id).status, 'published');
+  });
+
+  test('photo jointe : enregistrée, servie, refusée si ce n’est pas une image', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+    const photo = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+
+    const res = await api.post('/api/offers').send(offerBody({ guest, photo }));
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.photo_path.split('?')[0], `/offers/${res.body.id}/photo`);
+
+    const image = await api.get(`/api/offers/${res.body.id}/photo`);
+    assert.equal(image.status, 200);
+    assert.equal(image.type, 'image/jpeg');
+    assert.deepEqual(image.body, jpeg);
+
+    const without = await api.post('/api/offers').send(offerBody({ guest }));
+    assert.equal(without.body.photo_path, null);
+    assert.equal((await api.get(`/api/offers/${without.body.id}/photo`)).status, 404);
+
+    const fake = `data:image/png;base64,${Buffer.from('pas une image').toString('base64')}`;
+    const refused = await api.post('/api/offers').send(offerBody({ guest, photo: fake }));
+    assert.equal(refused.status, 400);
   });
 
   test('un invité publie : identité obligatoire, jeton remis une seule fois', async () => {

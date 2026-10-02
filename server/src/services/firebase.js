@@ -1,32 +1,46 @@
+import { readFileSync } from 'node:fs';
+
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 
+/** Compte de service : JSON brut, chemin d'un fichier .json, ou base64. */
 function parseServiceAccount(raw) {
-  const text = raw.trim().startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
-  return JSON.parse(text);
+  const value = raw.trim();
+  if (value.startsWith('{')) return JSON.parse(value);
+  if (value.toLowerCase().endsWith('.json')) {
+    return JSON.parse(readFileSync(value.replace(/^["']|["']$/g, ''), 'utf8'));
+  }
+  return JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
 }
 
 let auth = null;
 
-function firebaseAuth() {
-  if (auth) return auth;
-
+/** Application Firebase Admin partagée (Auth, Firestore), ou null si non configurée. */
+export function firebaseApp() {
   const { projectId, serviceAccount } = config.firebase;
-  if (!projectId && !serviceAccount) {
-    throw new HttpError(503, 'Authentification Firebase non configurée sur le serveur');
-  }
+  if (!projectId && !serviceAccount) return null;
   // Sans compte de service, seule la vérification des jetons fonctionne
-  // (désactivation et e-mail vérifié côté Firebase sont alors ignorés).
-  const app =
+  // (désactivation, e-mail vérifié et copie Firestore sont alors ignorés).
+  return (
     getApps()[0] ??
     initializeApp(
       serviceAccount
         ? { credential: cert(parseServiceAccount(serviceAccount)), projectId: projectId ?? undefined }
         : { projectId },
-    );
+    )
+  );
+}
+
+function firebaseAuth() {
+  if (auth) return auth;
+
+  const app = firebaseApp();
+  if (!app) {
+    throw new HttpError(503, 'Authentification Firebase non configurée sur le serveur');
+  }
   auth = getAuth(app);
   return auth;
 }

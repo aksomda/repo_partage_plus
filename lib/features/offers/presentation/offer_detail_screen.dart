@@ -94,14 +94,11 @@ class _DetailsState extends ConsumerState<_Details> {
           child: ListView(
             padding: EdgeInsets.zero,
             children: [
-              Container(
-                height: 180,
-                color: categoryColor(offer['category_id']),
-                child: Icon(
-                  categoryIcon(offer['category_icon']),
-                  size: 80,
-                  color: AppColors.primary,
-                ),
+              OfferPhoto(
+                offer: offer,
+                width: double.infinity,
+                height: offerPhotoUrl(offer) == null ? 180 : 240,
+                iconSize: 80,
               ),
               Padding(
                 padding: const EdgeInsets.all(20),

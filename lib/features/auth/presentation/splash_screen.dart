@@ -19,16 +19,12 @@ class SplashScreen extends ConsumerStatefulWidget {
 }
 
 class _SplashScreenState extends ConsumerState<SplashScreen> {
-  var _starting = false;
-
-  /// Demande l'autorisation de localisation (téléphone, navigateur, Windows),
-  /// puis ouvre les offres à proximité. En cas de refus, l'accueil propose
-  /// de choisir un point de départ sur la carte.
-  Future<void> _start() async {
-    setState(() => _starting = true);
-    await ref.read(originProvider.notifier).useCurrentPosition();
-    if (!mounted) return;
-    setState(() => _starting = false);
+  /// Ouvre tout de suite les offres à proximité et demande en parallèle
+  /// l'autorisation de localisation (téléphone, navigateur, Windows) :
+  /// l'accueil se met à jour dès que la position est connue, ou propose
+  /// de choisir un point de départ sur la carte en cas de refus.
+  void _start() {
+    ref.read(originProvider.notifier).useCurrentPosition();
     context.go(AppRoutes.home);
   }
 
@@ -90,17 +86,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                     ),
                     const SizedBox(height: 48),
                     FilledButton.icon(
-                      onPressed: _starting ? null : _start,
-                      icon: _starting
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.near_me_outlined),
+                      onPressed: _start,
+                      icon: const Icon(Icons.near_me_outlined),
                       label: const Text('Commencer'),
                     ),
                     const SizedBox(height: 4),
