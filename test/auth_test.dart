@@ -1,0 +1,205 @@
+import 'dart:convert';
+
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/offline/sync_controller.dart';
+import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
+import 'package:repo_partage_plus/features/auth/data/firebase_auth_gateway.dart';
+
+import 'helpers.dart';
+
+const registration = Registration(
+  actorId: 1,
+  lastName: 'Traoré',
+  firstName: 'Awa',
+  gender: 'female',
+  age: 28,
+  email: 'awa@test.local',
+  phone: '+226 70 00 00 00',
+  password: 'motdepasse1',
+);
+
+Map<String, dynamic> session(String email, {String role = 'beneficiary'}) => {
+  'token': 'jwt-$email',
+  'user': {'id': 7, 'email': email, 'role': role, 'status': 'active'},
+};
+
+void main() {
+  late FakeAuthGateway firebase;
+  late FakeServer server;
+  late ProviderContainer container;
+
+  AuthRepository repository() => container.read(authRepositoryProvider);
+  Map<String, dynamic> bodyOf(String path) => jsonDecode(
+    jsonEncode(server.requests.lastWhere((r) => r.path == path).data),
+  );
+
+  setUp(() async {
+    firebase = FakeAuthGateway();
+    server = FakeServer((request) async {
+      if (request.path == '/sync') return jsonResponse(200, {});
+      return jsonResponse(404, {'error': 'Route inconnue'});
+    });
+    final store = await memoryStore();
+    container = ProviderContainer(
+      overrides: [
+        localStoreProvider.overrideWithValue(store),
+        onlineProvider.overrideWith((ref) => Stream.value(false)),
+        authGatewayProvider.overrideWithValue(firebase),
+        dioProvider.overrideWithValue(Dio()..httpClientAdapter = server),
+      ],
+    );
+    addTearDown(container.dispose);
+  });
+
+  /// Attend la synchronisation lancée après l'ouverture de session.
+  Future<void> settle() =>
+      container.read(syncControllerProvider.notifier).syncNow();
+
+  group('inscription', () {
+    test(
+      'compte Firebase créé, profil envoyé avec le jeton, sans session',
+      () async {
+        server.handler = (request) async => jsonResponse(201, {
+          'user': {'status': 'pending'},
+        });
+
+        await repository().register(registration);
+
+        expect(firebase.accounts, contains('awa@test.local'));
+        final body = bodyOf('/auth/register');
+        expect(body['id_token'], 'token-awa@test.local');
+        expect(body['actor_id'], 1);
+        expect(body['gender'], 'female');
+        expect(body['age'], 28);
+        expect(body.containsKey('password'), isFalse);
+        expect(firebase.calls.last, 'signOut');
+        expect(container.read(authTokenProvider), isNull);
+      },
+    );
+
+    test('profil refusé : le compte Firebase créé est supprimé', () async {
+      server.handler = (request) async =>
+          jsonResponse(409, {'error': 'Un compte existe déjà'});
+
+      await expectLater(
+        repository().register(registration),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            'Un compte existe déjà',
+          ),
+        ),
+      );
+      expect(firebase.calls, containsAllInOrder(['create', 'delete']));
+      expect(firebase.accounts, isEmpty);
+    });
+
+    test(
+      'inscription interrompue : reprise avec le compte Firebase existant',
+      () async {
+        firebase.accounts['awa@test.local'] = 'motdepasse1';
+        server.handler = (request) async =>
+            jsonResponse(503, {'error': 'Panne'});
+
+        await expectLater(
+          repository().register(registration),
+          throwsA(anything),
+        );
+        // Compte existant avant cette tentative : jamais supprimé.
+        expect(firebase.calls, isNot(contains('delete')));
+        expect(firebase.accounts, contains('awa@test.local'));
+      },
+    );
+  });
+
+  group('activation et connexion', () {
+    test('le bon code ouvre la session', () async {
+      server.handler = (request) async => request.path == '/auth/verify-email'
+          ? jsonResponse(200, session('awa@test.local'))
+          : jsonResponse(200, {});
+
+      await repository().verifyEmail('awa@test.local', '123456');
+      await settle();
+
+      expect(bodyOf('/auth/verify-email'), {
+        'email': 'awa@test.local',
+        'code': '123456',
+      });
+      expect(container.read(authTokenProvider), 'jwt-awa@test.local');
+    });
+
+    test('connexion : jeton Firebase échangé contre une session API', () async {
+      firebase.accounts['awa@test.local'] = 'motdepasse1';
+      server.handler = (request) async => request.path == '/auth/firebase'
+          ? jsonResponse(200, session('awa@test.local'))
+          : jsonResponse(200, {});
+
+      await repository().login('awa@test.local', 'motdepasse1');
+      await settle();
+
+      expect(bodyOf('/auth/firebase'), {'id_token': 'token-awa@test.local'});
+      expect(container.read(authTokenProvider), 'jwt-awa@test.local');
+      expect(firebase.calls.last, 'signOut');
+    });
+
+    test('compte non activé : AccountPendingException avec l’e-mail', () async {
+      firebase.accounts['awa@test.local'] = 'motdepasse1';
+      server.handler = (request) async => jsonResponse(403, {
+        'error': 'Compte non activé',
+        'details': {'code': 'account_pending', 'email': 'awa@test.local'},
+      });
+
+      await expectLater(
+        repository().login('awa@test.local', 'motdepasse1'),
+        throwsA(
+          isA<AccountPendingException>().having(
+            (e) => e.email,
+            'email',
+            'awa@test.local',
+          ),
+        ),
+      );
+      expect(container.read(authTokenProvider), isNull);
+    });
+
+    test('compte désactivé : message du serveur', () async {
+      firebase.accounts['awa@test.local'] = 'motdepasse1';
+      server.handler = (request) async => jsonResponse(403, {
+        'error': 'Compte désactivé par l’administrateur',
+        'details': {'code': 'account_suspended'},
+      });
+
+      await expectLater(
+        repository().login('awa@test.local', 'motdepasse1'),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.code,
+            'code',
+            'account_suspended',
+          ),
+        ),
+      );
+    });
+
+    test(
+      'compte de démo inconnu de Firebase : connexion directe par l’API',
+      () async {
+        server.handler = (request) async => request.path == '/auth/login'
+            ? jsonResponse(200, session('admin@demo.local', role: 'admin'))
+            : jsonResponse(200, {});
+
+        await repository().login('admin@demo.local', 'Demo1234!');
+        await settle();
+
+        expect(bodyOf('/auth/login')['email'], 'admin@demo.local');
+        expect(container.read(authTokenProvider), 'jwt-admin@demo.local');
+      },
+    );
+  });
+}

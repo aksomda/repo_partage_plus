@@ -34,8 +34,52 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  flutter_local_notifications: ^22.3.1
-  timezone: ^0.11.1
+
+  # Versions figées (sans ^) : toute modification passe par une PR vers dev.
+
+  # Carte
+  flutter_map: 8.3.2
+  latlong2: 0.10.1
+
+  # Géolocalisation
+  geolocator: 14.0.3
+
+  # HTTP
+  dio: 5.11.1
+
+  # Gestion d'état
+  flutter_riverpod: 3.4.3
+
+  # Navigation
+  go_router: 17.5.0
+
+  # Notifications (rappel de retrait, DLC proche)
+  flutter_local_notifications: 22.3.1
+  timezone: 0.11.1
+
+  # Mode hors ligne : stockage local (mobile + web), détection du réseau,
+  # identifiants des actions en attente.
+  sembast: 3.8.11
+  sembast_web: 2.4.6
+  path_provider: 2.1.6
+  connectivity_plus: 7.3.1
+  uuid: 4.6.0
+
+  # Authentification (mot de passe géré par Firebase, profil dans MySQL)
+  firebase_core: 4.15.0
+  firebase_auth: ^6.7.0
+
+  # Itinéraire vers le lieu de retrait dans OsmAnd (cartes hors ligne)
+  android_intent_plus: 6.1.0
+  url_launcher: 6.3.2
+  rodiumai: ^0.1.1
+
+  # Recommandations : affinage par IA via Cloud Functions, préférences dictées
+  cloud_functions: 6.5.0
+  speech_to_text: 7.5.0
+  firebase_ai: ^4.0.0
+  firebase_messaging: ^16.7.0
+  firebase_storage: ^13.6.0
 
 dev_dependencies:
   flutter_test:
