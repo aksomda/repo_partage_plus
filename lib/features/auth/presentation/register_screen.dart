@@ -41,6 +41,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
       child: AuthLayout(
         title: 'Inscription',
         onBack: _back,
+        // Formulaire : jusqu'à 4 colonnes de champs sur grand écran.
+        maxWidth: _actor == null ? 440 : 1040,
         children: [
           if (_actor == null)
             _ActorStep(onSelected: (actor) => setState(() => _actor = actor))
@@ -186,6 +188,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   String? _gender;
   var _genderError = false;
   var _loading = false;
+  var _autovalidate = AutovalidateMode.disabled;
 
   bool get _isAssociation => widget.actor['permission_role'] == 'association';
 
@@ -209,6 +212,8 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   }
 
   Future<void> _submit() async {
+    // Après une première tentative, les erreurs se corrigent à la saisie.
+    setState(() => _autovalidate = AutovalidateMode.onUserInteraction);
     final valid = _form.currentState!.validate();
     setState(() => _genderError = _gender == null);
     if (!valid || _gender == null) return;
@@ -242,6 +247,10 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
       if (!mounted) return;
       showMessage(context, 'Un code d’activation a été envoyé à $email');
       context.go(AppRoutes.verifyEmailFor(email));
+    } on AccountExistsException catch (error) {
+      if (!mounted) return;
+      showMessage(context, error.toString());
+      context.go(AppRoutes.loginWith(email));
     } catch (error) {
       if (mounted) showMessage(context, error.toString(), error: true);
     } finally {
@@ -253,6 +262,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   Widget build(BuildContext context) {
     return Form(
       key: _form,
+      autovalidateMode: _autovalidate,
       child: AutofillGroup(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -270,129 +280,153 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
               ],
             ),
             const SizedBox(height: 24),
-            _twoColumns(
-              LabeledField(
-                label: 'Nom',
-                child: TextFormField(
-                  controller: _lastName,
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.next,
-                  autofillHints: const [AutofillHints.familyName],
-                  decoration: const InputDecoration(hintText: 'Ouédraogo'),
-                  validator: _name('Nom'),
-                ),
-              ),
-              LabeledField(
-                label: 'Prénom',
-                child: TextFormField(
-                  controller: _firstName,
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.next,
-                  autofillHints: const [AutofillHints.givenName],
-                  decoration: const InputDecoration(hintText: 'Awa'),
-                  validator: _name('Prénom'),
-                ),
-              ),
-            ),
-            _twoColumns(
-              LabeledField(
-                label: 'Sexe',
-                child: _GenderSelector(
-                  value: _gender,
-                  error: _genderError,
-                  onChanged: (value) => setState(() {
-                    _gender = value;
-                    _genderError = false;
-                  }),
-                ),
-              ),
-              LabeledField(
-                label: 'Âge',
-                child: TextFormField(
-                  controller: _age,
-                  keyboardType: TextInputType.number,
-                  textInputAction: TextInputAction.next,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(3),
-                  ],
-                  decoration: const InputDecoration(
-                    hintText: '25',
-                    suffixText: 'ans',
+            FieldGrid(
+              children: [
+                LabeledField(
+                  label: 'Nom',
+                  required: true,
+                  child: TextFormField(
+                    controller: _lastName,
+                    textCapitalization: TextCapitalization.words,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.familyName],
+                    decoration: const InputDecoration(hintText: 'Ouédraogo'),
+                    validator: _name('Nom'),
                   ),
-                  validator: (value) {
-                    final age = int.tryParse(value ?? '');
-                    if (age == null) return 'Âge obligatoire';
-                    if (age < 13) return '13 ans minimum';
-                    if (age > 120) return 'Âge invalide';
-                    return null;
-                  },
                 ),
-              ),
-            ),
-            LabeledField(
-              label: 'Adresse e-mail',
-              child: TextFormField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                textInputAction: TextInputAction.next,
-                autofillHints: const [AutofillHints.email],
-                decoration: const InputDecoration(
-                  hintText: 'exemple@mail.com',
-                  helperText: 'Un code d’activation vous y sera envoyé',
+                LabeledField(
+                  label: 'Prénom',
+                  required: true,
+                  child: TextFormField(
+                    controller: _firstName,
+                    textCapitalization: TextCapitalization.words,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.givenName],
+                    decoration: const InputDecoration(hintText: 'Awa'),
+                    validator: _name('Prénom'),
+                  ),
                 ),
-                validator: validateEmail,
-              ),
-            ),
-            LabeledField(
-              label: 'Téléphone',
-              child: TextFormField(
-                controller: _phone,
-                keyboardType: TextInputType.phone,
-                textInputAction: TextInputAction.next,
-                autofillHints: const [AutofillHints.telephoneNumber],
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
-                ],
-                decoration: const InputDecoration(hintText: '+226 70 00 00 00'),
-                validator: (value) {
-                  final phone = value?.trim() ?? '';
-                  if (phone.isEmpty) return 'Téléphone obligatoire';
-                  if (!RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(phone)) {
-                    return 'Numéro invalide';
-                  }
-                  return null;
-                },
-              ),
-            ),
-            if (_isAssociation) ..._associationFields(),
-            LabeledField(
-              label: 'Mot de passe',
-              child: PasswordField(
-                controller: _password,
-                hint: '8 caractères, lettres et chiffres',
-                textInputAction: TextInputAction.next,
-                autofillHints: const [AutofillHints.newPassword],
-                validator: validatePassword,
-              ),
-            ),
-            LabeledField(
-              label: 'Confirmer le mot de passe',
-              child: PasswordField(
-                controller: _confirm,
-                hint: 'Saisissez-le à nouveau',
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _submit(),
-                validator: (value) => value != _password.text
-                    ? 'Les mots de passe ne correspondent pas'
-                    : null,
-              ),
+                LabeledField(
+                  label: 'Sexe',
+                  required: true,
+                  child: _GenderSelector(
+                    value: _gender,
+                    error: _genderError,
+                    onChanged: (value) => setState(() {
+                      _gender = value;
+                      _genderError = false;
+                    }),
+                  ),
+                ),
+                LabeledField(
+                  label: 'Âge',
+                  required: true,
+                  child: TextFormField(
+                    controller: _age,
+                    keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.next,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(3),
+                    ],
+                    decoration: const InputDecoration(
+                      hintText: '25',
+                      suffixText: 'ans',
+                    ),
+                    validator: (value) {
+                      final age = int.tryParse(value ?? '');
+                      if (age == null) return 'Âge obligatoire';
+                      if (age < 13) return '13 ans minimum';
+                      if (age > 120) return 'Âge invalide';
+                      return null;
+                    },
+                  ),
+                ),
+                LabeledField(
+                  label: 'Adresse e-mail',
+                  required: true,
+                  child: TextFormField(
+                    controller: _email,
+                    keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.email],
+                    decoration: const InputDecoration(
+                      hintText: 'exemple@mail.com',
+                      helperText: 'Un code d’activation vous y sera envoyé',
+                    ),
+                    validator: validateEmail,
+                  ),
+                ),
+                LabeledField(
+                  label: 'Téléphone',
+                  required: true,
+                  child: TextFormField(
+                    controller: _phone,
+                    keyboardType: TextInputType.phone,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.telephoneNumber],
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
+                    ],
+                    decoration: const InputDecoration(
+                      hintText: '+226 70 00 00 00',
+                    ),
+                    validator: (value) {
+                      final phone = value?.trim() ?? '';
+                      if (phone.isEmpty) return 'Téléphone obligatoire';
+                      if (!RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(phone)) {
+                        return 'Numéro invalide';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+                if (_isAssociation) ..._associationFields(),
+                LabeledField(
+                  label: 'Mot de passe',
+                  required: true,
+                  child: PasswordField(
+                    controller: _password,
+                    hint: '8 caractères, lettres et chiffres',
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.newPassword],
+                    validator: validatePassword,
+                  ),
+                ),
+                LabeledField(
+                  label: 'Confirmer le mot de passe',
+                  required: true,
+                  child: PasswordField(
+                    controller: _confirm,
+                    hint: 'Saisissez-le à nouveau',
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _submit(),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Confirmation obligatoire';
+                      }
+                      if (value != _password.text) {
+                        return 'Les mots de passe ne correspondent pas';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
-            LoadingButton(
-              label: 'Créer mon compte',
-              loading: _loading,
-              onPressed: _submit,
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: LoadingButton(
+                    label: 'Créer mon compte',
+                    loading: _loading,
+                    onPressed: _submit,
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -403,6 +437,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   List<Widget> _associationFields() => [
     LabeledField(
       label: 'Nom de l’association',
+      required: true,
       child: TextFormField(
         controller: _associationName,
         textInputAction: TextInputAction.next,
@@ -429,27 +464,12 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
     final text = value?.trim() ?? '';
     if (text.isEmpty) return '$field obligatoire';
     if (text.length < 2) return '2 caractères minimum';
+    if (!_namePattern.hasMatch(text)) return '$field invalide';
     return null;
   };
 
-  /// Deux champs côte à côte, empilés sur les écrans étroits.
-  Widget _twoColumns(Widget first, Widget second) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 340) {
-          return Column(children: [first, second]);
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(child: first),
-            const SizedBox(width: 12),
-            Expanded(child: second),
-          ],
-        );
-      },
-    );
-  }
+  /// Lettres (accents compris), espaces, tirets, apostrophes et points.
+  static final _namePattern = RegExp(r"^[\p{L} .'’-]+$", unicode: true);
 }
 
 class _GenderSelector extends StatelessWidget {

@@ -1,5 +1,7 @@
 import { ZodError } from 'zod';
 
+import { isDatabaseUnavailable } from '../db/pool.js';
+
 export class HttpError extends Error {
   constructor(status, message, details) {
     super(message);
@@ -35,6 +37,14 @@ export function errorHandler(error, req, res, next) {
 
   if (error.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'JSON invalide' });
+  }
+
+  // Base arrêtée ou injoignable : réponse claire, le serveur continue.
+  if (isDatabaseUnavailable(error)) {
+    console.error('MySQL indisponible :', error.code ?? error.message);
+    return res
+      .status(503)
+      .json({ error: 'Service momentanément indisponible : réessayez dans quelques instants' });
   }
 
   if (error.code === 'ER_DUP_ENTRY') {

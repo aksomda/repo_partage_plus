@@ -6,6 +6,7 @@ import { authenticate, requireRole } from '../http/auth.js';
 import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam, pagination, reason } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
+import { firestoreMirror } from '../services/firestore_mirror.js';
 import { runScheduledJobs } from '../services/jobs.js';
 import { notify } from '../services/notifications.js';
 import { OFFER_SELECT } from '../services/offers.js';
@@ -270,6 +271,7 @@ adminRouter.delete('/actors/:id', async (req, res) => {
   const { id: actorId } = idParam.parse(req.params);
   // Refusé (409) si des comptes l'utilisent : le désactiver à la place.
   const result = await query('DELETE FROM actors WHERE id = ?', [actorId]);
+  firestoreMirror.deleted('actors', [actorId]);
   if (result.affectedRows === 0) throw notFound('Acteur');
   res.status(204).end();
 });
@@ -351,6 +353,7 @@ adminRouter.put('/categories/:id', async (req, res) => {
 adminRouter.delete('/categories/:id', async (req, res) => {
   const { id: categoryId } = idParam.parse(req.params);
   const result = await query('DELETE FROM categories WHERE id = ?', [categoryId]);
+  firestoreMirror.deleted('categories', [categoryId]);
   if (result.affectedRows === 0) throw notFound('Catégorie');
   res.status(204).end();
 });
@@ -390,6 +393,7 @@ adminRouter.put('/factors/:id', async (req, res) => {
 adminRouter.delete('/factors/:id', async (req, res) => {
   const { id: factorId } = idParam.parse(req.params);
   const result = await query('DELETE FROM impact_factors WHERE id = ?', [factorId]);
+  firestoreMirror.deleted('impact_factors', [factorId]);
   if (result.affectedRows === 0) throw notFound('Facteur');
   res.status(204).end();
 });

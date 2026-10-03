@@ -61,6 +61,9 @@ abstract final class AppRoutes {
   static String loginThen(String from) =>
       Uri(path: login, queryParameters: {'from': from}).toString();
 
+  static String loginWith(String email) =>
+      Uri(path: login, queryParameters: {'email': email}).toString();
+
   /// Écran d'arrivée après connexion, selon les droits du profil.
   static String homeFor(Object? profile) =>
       profile is Map && profile['role'] == 'admin' ? adminAccounts : home;

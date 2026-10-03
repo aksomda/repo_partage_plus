@@ -4,7 +4,7 @@ import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
 import { OFFER_AVAILABLE, OFFER_SELECT } from '../services/offers.js';
 import { loadProfile } from './auth.js';
-import { formatImpact, IMPACT_SELECT } from './impact.js';
+import { buildDashboard } from './impact.js';
 import { forViewer, RESERVATION_SELECT } from './reservations.js';
 
 export const syncRouter = Router();
@@ -48,7 +48,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     received,
     myOffers,
     notifications,
-    [impact],
+    dashboard,
   ] = await Promise.all([
     loadProfile(userId),
     query(
@@ -72,7 +72,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     query('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 100', [
       userId,
     ]),
-    query(`${IMPACT_SELECT} AND (r.beneficiary_id = ? OR o.donor_id = ?)`, [userId, userId]),
+    buildDashboard(userId),
   ]);
 
   const admin = isAdmin
@@ -105,7 +105,14 @@ syncRouter.get('/', authenticate, async (req, res) => {
     received: received.map((row) => forViewer(row, req.user)),
     my_offers: myOffers,
     notifications,
-    impact: formatImpact(impact),
+    // Compteurs, évolution sur 12 mois, catégories et indicateurs sociaux :
+    // gardés sur l'appareil pour l'écran « Mon impact » hors ligne.
+    impact: dashboard.impact,
+    impact_monthly: dashboard.impact_monthly,
+    impact_by_category: dashboard.impact_by_category,
+    impact_social: dashboard.impact_social,
+    impact_as_of: dashboard.as_of,
+    impact_source: dashboard.source,
     admin,
   });
 });

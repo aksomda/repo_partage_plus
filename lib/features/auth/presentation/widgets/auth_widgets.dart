@@ -1,18 +1,27 @@
 import 'package:flutter/material.dart';
 
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 
 /// Gabarit commun des écrans d'authentification : fond blanc, contenu
-/// centré et limité en largeur (tablette, web).
+/// centré et limité en largeur (tablette, web), logo Partage+ en tête.
 class AuthLayout extends StatelessWidget {
   const AuthLayout({
     super.key,
     required this.children,
     this.title,
     this.onBack,
+    this.maxWidth = 440,
+    this.showLogo = true,
   });
 
   final List<Widget> children;
+
+  /// Largeur maximale du contenu (plus large pour un formulaire en grille).
+  final double maxWidth;
+
+  /// Affiche le logo complet au-dessus du contenu.
+  final bool showLogo;
 
   /// Titre de la barre du haut (null : pas de barre, comme sur la maquette).
   final String? title;
@@ -39,10 +48,16 @@ class AuthLayout extends StatelessWidget {
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
+              constraints: BoxConstraints(maxWidth: maxWidth),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: children,
+                children: [
+                  if (showLogo) ...[
+                    const Center(child: BrandLogo.full(size: 120)),
+                    const SizedBox(height: 24),
+                  ],
+                  ...children,
+                ],
               ),
             ),
           ),
@@ -82,11 +97,18 @@ class AuthHeading extends StatelessWidget {
 }
 
 /// Champ précédé de son libellé, comme sur la maquette.
+/// Un champ obligatoire ([required]) est signalé par « * » après le libellé.
 class LabeledField extends StatelessWidget {
-  const LabeledField({super.key, required this.label, required this.child});
+  const LabeledField({
+    super.key,
+    required this.label,
+    required this.child,
+    this.required = false,
+  });
 
   final String label;
   final Widget child;
+  final bool required;
 
   @override
   Widget build(BuildContext context) {
@@ -95,8 +117,17 @@ class LabeledField extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            label,
+          Text.rich(
+            TextSpan(
+              text: label,
+              children: [
+                if (required)
+                  const TextSpan(
+                    text: ' *',
+                    style: TextStyle(color: AppColors.danger),
+                  ),
+              ],
+            ),
             style: Theme.of(context).textTheme.labelLarge?.copyWith(
               color: AppColors.text,
               fontWeight: FontWeight.w600,
@@ -108,6 +139,59 @@ class LabeledField extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Champs en grille pour éviter le défilement : 4 colonnes au maximum sur
+/// grand écran (web, tablette), 2 sur écran moyen, 1 sur téléphone.
+/// Un enfant [FieldSpan] occupe plusieurs colonnes.
+class FieldGrid extends StatelessWidget {
+  const FieldGrid({super.key, required this.children});
+
+  final List<Widget> children;
+
+  static const _gap = 12.0;
+  static const _minColumnWidth = 220.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final fit = ((width + _gap) / (_minColumnWidth + _gap)).floor();
+        // 3 colonnes laisseraient des rangées incomplètes : 4, 2 ou 1.
+        final columns = fit >= 4 ? 4 : (fit >= 2 ? 2 : 1);
+        final columnWidth = (width - _gap * (columns - 1)) / columns;
+        double spanWidth(int span) {
+          final n = span.clamp(1, columns);
+          return columnWidth * n + _gap * (n - 1);
+        }
+
+        return Wrap(
+          spacing: _gap,
+          children: [
+            for (final child in children)
+              SizedBox(
+                width: spanWidth(child is FieldSpan ? child.span : 1),
+                child: child,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Élément de [FieldGrid] sur plusieurs colonnes ([full] : toute la largeur).
+class FieldSpan extends StatelessWidget {
+  const FieldSpan({super.key, required this.span, required this.child});
+
+  const FieldSpan.full({super.key, required this.child}) : span = 4;
+
+  final int span;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 /// Champ mot de passe avec bouton afficher / masquer.
@@ -242,6 +326,7 @@ String? validateEmail(String? value) {
 
 String? validatePassword(String? value) {
   final password = value ?? '';
+  if (password.isEmpty) return 'Mot de passe obligatoire';
   if (password.length < 8) return '8 caractères minimum';
   if (!password.contains(RegExp(r'[0-9]'))) return 'Au moins un chiffre';
   if (!password.contains(RegExp(r'[A-Za-z]'))) return 'Au moins une lettre';

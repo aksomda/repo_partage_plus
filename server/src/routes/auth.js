@@ -7,6 +7,7 @@ import { authenticate, signToken } from '../http/auth.js';
 import { HttpError } from '../http/errors.js';
 import { id, latitude, longitude } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
+import { firestoreMirror } from '../services/firestore_mirror.js';
 import { consumeActivationCode, issueActivationCode } from '../services/otp.js';
 
 export const authRouter = Router();
@@ -131,7 +132,9 @@ authRouter.post('/register', async (req, res) => {
         );
     const retry = existing && existing.status === 'pending' && sameAccount;
     if (existing && !retry) {
-      throw new HttpError(409, 'Un compte existe déjà avec cette adresse e-mail');
+      throw new HttpError(409, 'Un compte existe déjà avec cette adresse e-mail', {
+        code: 'email_taken',
+      });
     }
 
     const fields = {
@@ -154,7 +157,11 @@ authRouter.post('/register', async (req, res) => {
     let newId;
     if (retry) {
       await conn.query('UPDATE users SET ? WHERE id = ?', [fields, existing.id]);
+      const [old] = await conn.query('SELECT id FROM associations WHERE user_id = ?', [
+        existing.id,
+      ]);
       await conn.query('DELETE FROM associations WHERE user_id = ?', [existing.id]);
+      firestoreMirror.deleted('associations', old.map((row) => row.id));
       newId = existing.id;
     } else {
       const [result] = await conn.query('INSERT INTO users SET ?', [fields]);
