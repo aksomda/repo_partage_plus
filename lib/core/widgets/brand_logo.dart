@@ -2,23 +2,44 @@ import 'package:flutter/material.dart';
 
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 
-/// Logo texte « Partage+ » avec pictogramme et slogan optionnel.
+/// Logo « Partage+ » : emblème (image) suivi du nom et du slogan optionnel.
 ///
 /// [onDark] pour l'afficher sur fond vert (barre latérale admin, bandeaux).
+/// [BrandLogo.full] affiche le logo complet (écrans de lancement, connexion,
+/// inscription…).
 class BrandLogo extends StatelessWidget {
   const BrandLogo({
     super.key,
     this.size = 28,
     this.showTagline = true,
     this.onDark = false,
-  });
+  }) : full = false;
+
+  /// Logo complet (emblème, nom et slogan) de hauteur [size].
+  const BrandLogo.full({super.key, this.size = 160})
+    : full = true,
+      showTagline = true,
+      onDark = false;
+
+  static const fullAsset = 'assets/images/logo.png';
+  static const markAsset = 'assets/images/logo_mark.png';
 
   final double size;
   final bool showTagline;
   final bool onDark;
+  final bool full;
 
   @override
   Widget build(BuildContext context) {
+    if (full) {
+      return Image.asset(
+        fullAsset,
+        height: size,
+        fit: BoxFit.contain,
+        semanticLabel: 'Partage+ — Partager plutôt que jeter',
+      );
+    }
+
     final main = onDark ? Colors.white : AppColors.primary;
 
     // Réduit plutôt que déborder sur les écrans étroits.
@@ -30,15 +51,14 @@ class BrandLogo extends StatelessWidget {
           Container(
             width: size * 1.4,
             height: size * 1.4,
-            decoration: BoxDecoration(
-              color: onDark ? Colors.white : AppColors.primarySoft,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.volunteer_activism,
-              size: size * 0.8,
-              color: AppColors.leaf,
-            ),
+            padding: EdgeInsets.all(onDark ? size * 0.12 : 0),
+            decoration: onDark
+                ? const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  )
+                : null,
+            child: Image.asset(markAsset, fit: BoxFit.contain),
           ),
           SizedBox(width: size * 0.35),
           Column(

@@ -154,7 +154,7 @@ void main() {
         'Mot de passe',
         'Confirmer le mot de passe',
       ]) {
-        expect(find.text(label), findsOneWidget, reason: label);
+        expect(find.text('$label *'), findsOneWidget, reason: label);
       }
     });
 
@@ -176,7 +176,9 @@ void main() {
       expect(find.text('Sexe obligatoire'), findsOneWidget);
       expect(find.text('Âge obligatoire'), findsOneWidget);
       expect(find.text('Adresse e-mail obligatoire'), findsOneWidget);
-      expect(find.text('8 caractères minimum'), findsOneWidget);
+      expect(find.text('Téléphone obligatoire'), findsOneWidget);
+      expect(find.text('Mot de passe obligatoire'), findsOneWidget);
+      expect(find.text('Confirmation obligatoire'), findsOneWidget);
     });
   });
 
@@ -307,7 +309,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Référence de la transaction'), findsOneWidget);
-        expect(find.text('Téléphone'), findsOneWidget);
+        expect(find.text('Téléphone *'), findsOneWidget);
         expect(find.text('À payer : 250 F CFA'), findsOneWidget);
 
         await tester.tap(find.byTooltip('Plus'));
@@ -349,7 +351,28 @@ void main() {
       );
       await tester.tap(find.text('Prix réduit'));
       await tester.pumpAndSettle();
-      expect(find.text('Comment payer ?'), findsOneWidget);
+      expect(find.text('Comment payer ? *'), findsOneWidget);
+    });
+
+    testWidgets('publier : formulaire en 4 colonnes, sans défilement', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1920, 906);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final store = await storeWithOffers(tester);
+      await pumpRoute(tester, AppRoutes.createOffer, store: store);
+
+      // Quantité, Unité, Poids et Date limite sur la même rangée.
+      final top = tester.getTopLeft(find.text('Quantité *')).dy;
+      expect(
+        tester.getTopLeft(find.text('Date limite de consommation *')).dy,
+        top,
+      );
+      final scroll = tester.state<ScrollableState>(
+        find.byType(Scrollable).first,
+      );
+      expect(scroll.position.maxScrollExtent, 0);
     });
 
     testWidgets('écran réservé aux comptes : redirection vers la connexion', (

@@ -1,32 +1,54 @@
+import { readFileSync } from 'node:fs';
+
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 
+/** Compte de service : JSON brut, chemin d'un fichier .json, ou base64. */
 function parseServiceAccount(raw) {
-  const text = raw.trim().startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
-  return JSON.parse(text);
+  const value = raw.trim();
+  if (value.startsWith('{')) return JSON.parse(value);
+  if (value.toLowerCase().endsWith('.json')) {
+    return JSON.parse(readFileSync(value.replace(/^["']|["']$/g, ''), 'utf8'));
+  }
+  return JSON.parse(Buffer.from(value, 'base64').toString('utf8'));
 }
 
 let auth = null;
 
-function firebaseAuth() {
-  if (auth) return auth;
-
+/** Application Firebase Admin partagée (Auth, Firestore), ou null si non configurée. */
+export function firebaseApp() {
   const { projectId, serviceAccount } = config.firebase;
-  if (!projectId && !serviceAccount) {
-    throw new HttpError(503, 'Authentification Firebase non configurée sur le serveur');
-  }
+  if (!projectId && !serviceAccount) return null;
   // Sans compte de service, seule la vérification des jetons fonctionne
-  // (désactivation et e-mail vérifié côté Firebase sont alors ignorés).
-  const app =
+  // (désactivation, e-mail vérifié et copie Firestore sont alors ignorés).
+  return (
     getApps()[0] ??
     initializeApp(
       serviceAccount
         ? { credential: cert(parseServiceAccount(serviceAccount)), projectId: projectId ?? undefined }
         : { projectId },
-    );
+    )
+  );
+}
+
+function firebaseAuth() {
+  if (auth) return auth;
+
+  let app;
+  try {
+    app = firebaseApp();
+  } catch (error) {
+    // Compte de service illisible (chemin erroné, JSON invalide) : c'est la
+    // configuration du serveur qui est en cause, pas la session.
+    console.error('Firebase : compte de service illisible :', error.message);
+    throw new HttpError(503, 'Firebase mal configuré sur le serveur (FIREBASE_SERVICE_ACCOUNT)');
+  }
+  if (!app) {
+    throw new HttpError(503, 'Authentification Firebase non configurée sur le serveur');
+  }
   auth = getAuth(app);
   return auth;
 }
@@ -37,11 +59,15 @@ function firebaseAuth() {
 const realGateway = {
   /** Vérifie un jeton d'identité Firebase et renvoie { uid, email }. */
   async verifyIdToken(idToken) {
+    const firebaseAuthClient = firebaseAuth();
     try {
-      const decoded = await firebaseAuth().verifyIdToken(idToken);
+      const decoded = await firebaseAuthClient.verifyIdToken(idToken);
       return { uid: decoded.uid, email: decoded.email?.toLowerCase() ?? null };
     } catch (error) {
-      if (error instanceof HttpError) throw error;
+      // Firebase injoignable (réseau, panne) : ce n'est pas la session qui est en cause.
+      if (/network|internal-error|unavailable|timeout/i.test(error?.code ?? '')) {
+        throw new HttpError(503, 'Firebase momentanément indisponible : réessayez plus tard');
+      }
       throw new HttpError(401, 'Session Firebase invalide ou expirée');
     }
   },

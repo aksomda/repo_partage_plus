@@ -18,21 +18,46 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Partage+ : partager plutôt que jeter.">
+  <meta name="theme-color" content="#1B7A3A">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="repo_partage_plus">
+  <meta name="apple-mobile-web-app-title" content="Partage+">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon.png"/>
 
-  <title>repo_partage_plus</title>
+  <title>Partage+</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /* Affiché instantanément, retiré dès la première image de Flutter. */
+    #splash {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+      background: linear-gradient(#fff, #e6f3ea);
+      font-family: system-ui, sans-serif; color: #1b7a3a;
+    }
+    #splash img { width: 200px; max-width: 60vw; height: auto; }
+    #splash i {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 3px solid #c8e6c9; border-top-color: #1b7a3a;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
 </head>
 <body>
+  <div id="splash"><img src="icons/logo-splash.png" alt="Partage+"><i></i></div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var splash = document.getElementById('splash');
+      if (splash) splash.remove();
+    });
+  </script>
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader

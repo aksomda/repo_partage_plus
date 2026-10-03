@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:repo_partage_plus/core/firebase/firebase_init.dart';
 import 'package:repo_partage_plus/core/firebase/firebase_rest.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
@@ -45,6 +46,7 @@ class CloudFunctionAiRefiner implements AiRefiner {
 
   @override
   Future<AiRefinement> refine(Map<String, Object?> payload) async {
+    await ensureFirebase();
     if (Firebase.apps.isEmpty) {
       throw const AiUnavailable('IA non configurée dans cette version');
     }

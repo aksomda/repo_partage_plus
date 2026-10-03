@@ -18,13 +18,15 @@ import { recommendationsRouter } from './routes/recommendations.js';
 import { reservationsRouter } from './routes/reservations.js';
 import { syncRouter } from './routes/sync.js';
 import { usersRouter } from './routes/users.js';
+import { mirrorAfterWrite } from './services/firestore_mirror.js';
 import { runScheduledJobs } from './services/jobs.js';
 
 export const app = express();
 
 app.set('trust proxy', 1);
 app.use(cors({ origin: config.corsOrigins }));
-app.use(express.json({ limit: '1mb' }));
+// Marge pour la photo d'une offre (2 Mo, encodée en base64).
+app.use(express.json({ limit: '4mb' }));
 
 // Utilisé par Render (health check) et pour réveiller le serveur avant la démo.
 app.get('/health', async (req, res) => {
@@ -34,6 +36,8 @@ app.get('/health', async (req, res) => {
 
 const api = express.Router();
 
+// Copie dans Firestore de tout ce qui a changé dans MySQL.
+api.use(mirrorAfterWrite);
 api.use(idempotency);
 api.use('/sync', syncRouter);
 api.use('/auth', authRouter);

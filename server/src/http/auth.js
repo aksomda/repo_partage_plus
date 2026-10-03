@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
 
 import { config } from '../config.js';
-import { query } from '../db/pool.js';
+import { isDatabaseUnavailable, query } from '../db/pool.js';
+import { firestoreMirror } from '../services/firestore_mirror.js';
 import { HttpError } from './errors.js';
 
 export function signToken(user) {
@@ -22,14 +23,30 @@ async function userFromRequest(req) {
   }
 
   // Relu en base pour appliquer immédiatement une suspension ou un changement de rôle.
-  const [user] = await query(
-    'SELECT id, name, email, role, status FROM users WHERE id = ?',
-    [Number(payload.sub)],
-  );
+  const user = await loadUser(Number(payload.sub));
   if (!user) throw new HttpError(401, 'Compte introuvable');
   if (user.status === 'pending') throw new HttpError(403, 'Compte non activé');
   if (user.status !== 'active') throw new HttpError(403, 'Compte désactivé');
   return user;
+}
+
+/**
+ * Compte lu dans MySQL ; MySQL indisponible : copie Firestore du compte
+ * (même statut, pour que les lectures de secours restent protégées).
+ */
+async function loadUser(id) {
+  try {
+    const [user] = await query('SELECT id, name, email, role, status FROM users WHERE id = ?', [
+      id,
+    ]);
+    return user;
+  } catch (error) {
+    if (!isDatabaseUnavailable(error)) throw error;
+    const copy = await firestoreMirror.readUser(id).catch(() => null);
+    if (!copy) throw error;
+    const { name, email, role, status } = copy;
+    return { id, name, email, role, status, fromCopy: true };
+  }
 }
 
 /** Exige un utilisateur connecté, disponible ensuite dans req.user. */

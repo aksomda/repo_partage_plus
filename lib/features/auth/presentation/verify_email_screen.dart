@@ -7,7 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
-import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
@@ -99,24 +99,12 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   Widget build(BuildContext context) {
     return AuthLayout(
       title: 'Activation du compte',
+      // Le logo remplace le pictogramme pour garder le bouton visible.
+      showLogo: false,
       onBack: () =>
           context.canPop() ? context.pop() : context.go(AppRoutes.login),
       children: [
-        Center(
-          child: Container(
-            width: 80,
-            height: 80,
-            decoration: const BoxDecoration(
-              color: AppColors.primarySoft,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.mark_email_read_outlined,
-              size: 40,
-              color: AppColors.primary,
-            ),
-          ),
-        ),
+        const Center(child: BrandLogo.full(size: 100)),
         const SizedBox(height: 24),
         const AuthHeading(
           title: 'Vérifiez votre e-mail',

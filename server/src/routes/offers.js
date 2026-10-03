@@ -20,6 +20,7 @@ import {
   issueGuestToken,
 } from '../services/guests.js';
 import { notify } from '../services/notifications.js';
+import { photoSchema, savePhoto } from '../services/photos.js';
 import {
   DISTANCE_KM,
   DONOR_NAME,
@@ -47,6 +48,7 @@ const offerSchema = z
     address: z.string().trim().min(3).max(255),
     latitude,
     longitude,
+    photo: photoSchema,
   })
   .refine((data) => data.pickup_end > data.pickup_start, {
     message: 'La fin du retrait doit être après le début',
@@ -169,6 +171,23 @@ offersRouter.get('/mine', authenticate, async (req, res) => {
   res.json(offers);
 });
 
+// Photo de l'offre (public, comme l'offre ; mise en cache, l'URL change
+// avec la photo). Pas servie pour une offre refusée par la modération.
+offersRouter.get('/:id/photo', async (req, res) => {
+  const { id: offerId } = idParam.parse(req.params);
+  const [photo] = await query(
+    `SELECT p.mime, p.data FROM offer_photos p
+     JOIN offers o ON o.id = p.offer_id
+     WHERE p.offer_id = ? AND o.status <> 'rejected'`,
+    [offerId],
+  );
+  if (!photo) throw notFound('Photo');
+  res
+    .type(photo.mime)
+    .set('Cache-Control', 'public, max-age=604800, immutable')
+    .send(photo.data);
+});
+
 offersRouter.get('/:id', optionalAuth, async (req, res) => {
   const { id: offerId } = idParam.parse(req.params);
   const [offer] = await query(`${OFFER_SELECT} WHERE o.id = ?`, [offerId]);
@@ -214,6 +233,7 @@ offersRouter.post('/', optionalAuth, guestRateLimit({ max: 10 }), async (req, re
         longitude: data.longitude,
       },
     ]);
+    await savePhoto(conn, result.insertId, data.photo);
     return {
       offerId: result.insertId,
       guestToken: guest ? await issueGuestToken(conn, 'offer', result.insertId) : null,
@@ -238,32 +258,35 @@ offersRouter.put('/:id', authenticate, async (req, res) => {
     throw new HttpError(409, 'Offre déjà réservée, modification impossible');
   }
 
-  await query(
-    `UPDATE offers SET category_id = ?, title = ?, description = ?, initial_quantity = ?,
-       quantity_available = ?, unit = ?, weight_kg = ?, price = ?, payment_info = ?,
-       expiry_date = ?, pickup_start = ?,
-       pickup_end = ?, address = ?, latitude = ?, longitude = ?,
-       status = 'pending', moderation_reason = NULL, expiry_notified_at = NULL
-     WHERE id = ?`,
-    [
-      data.category_id,
-      data.title,
-      data.description ?? null,
-      data.quantity,
-      data.quantity,
-      data.unit,
-      data.weight_kg,
-      data.price,
-      data.price > 0 ? data.payment_info : null,
-      data.expiry_date,
-      data.pickup_start,
-      data.pickup_end,
-      data.address,
-      data.latitude,
-      data.longitude,
-      offerId,
-    ],
-  );
+  await transaction(async (conn) => {
+    await conn.query(
+      `UPDATE offers SET category_id = ?, title = ?, description = ?, initial_quantity = ?,
+         quantity_available = ?, unit = ?, weight_kg = ?, price = ?, payment_info = ?,
+         expiry_date = ?, pickup_start = ?,
+         pickup_end = ?, address = ?, latitude = ?, longitude = ?,
+         status = 'pending', moderation_reason = NULL, expiry_notified_at = NULL
+       WHERE id = ?`,
+      [
+        data.category_id,
+        data.title,
+        data.description ?? null,
+        data.quantity,
+        data.quantity,
+        data.unit,
+        data.weight_kg,
+        data.price,
+        data.price > 0 ? data.payment_info : null,
+        data.expiry_date,
+        data.pickup_start,
+        data.pickup_end,
+        data.address,
+        data.latitude,
+        data.longitude,
+        offerId,
+      ],
+    );
+    await savePhoto(conn, offerId, data.photo);
+  });
 
   const [updated] = await query(`${OFFER_SELECT} WHERE o.id = ?`, [offerId]);
   res.json(updated);

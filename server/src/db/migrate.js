@@ -35,6 +35,7 @@ const OFFER_COLUMNS = {
   guest_phone: 'VARCHAR(30) NULL AFTER guest_last_name',
   price: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER weight_kg',
   payment_info: 'VARCHAR(255) NULL AFTER price',
+  photo_updated_at: 'DATETIME NULL AFTER longitude',
 };
 
 const RESERVATION_COLUMNS = {
@@ -44,6 +45,10 @@ const RESERVATION_COLUMNS = {
   amount: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER quantity',
   payment_reference: 'VARCHAR(64) NULL AFTER amount',
 };
+
+/** `updated_at` sur les tables qui n'en avaient pas (copie Firestore). */
+const UPDATED_AT =
+  'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at';
 
 async function addMissingColumns(conn, table, columns) {
   const [rows] = await conn.query(
@@ -63,6 +68,9 @@ async function upgrade(conn) {
   await addMissingColumns(conn, 'users', USER_COLUMNS);
   await addMissingColumns(conn, 'offers', OFFER_COLUMNS);
   await addMissingColumns(conn, 'reservations', RESERVATION_COLUMNS);
+  for (const table of ['associations', 'categories', 'notifications']) {
+    await addMissingColumns(conn, table, { updated_at: UPDATED_AT });
+  }
   await conn.query('ALTER TABLE offers MODIFY donor_id INT UNSIGNED NULL');
   await conn.query('ALTER TABLE reservations MODIFY beneficiary_id INT UNSIGNED NULL');
 

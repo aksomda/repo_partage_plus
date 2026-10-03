@@ -55,8 +55,10 @@ GoRouter createRouter({
       ),
       GoRoute(
         path: AppRoutes.login,
-        builder: (context, state) =>
-            LoginScreen(from: state.uri.queryParameters['from']),
+        builder: (context, state) => LoginScreen(
+          from: state.uri.queryParameters['from'],
+          initialEmail: state.uri.queryParameters['email'],
+        ),
       ),
       GoRoute(
         path: AppRoutes.register,

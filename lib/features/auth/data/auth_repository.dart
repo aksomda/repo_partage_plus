@@ -71,6 +71,21 @@ class AccountPendingException implements Exception {
   String toString() => 'Compte non activé : saisissez le code reçu par e-mail';
 }
 
+/// L'adresse e-mail a déjà un compte : un lien de réinitialisation du mot
+/// de passe a été envoyé ([resetSent]) et l'utilisateur doit se connecter.
+class AccountExistsException implements Exception {
+  const AccountExistsException(this.email, {required this.resetSent});
+
+  final String email;
+  final bool resetSent;
+
+  @override
+  String toString() => resetSent
+      ? 'Un compte existe déjà avec $email : un lien de réinitialisation '
+            'du mot de passe vous a été envoyé'
+      : 'Un compte existe déjà avec $email : connectez-vous';
+}
+
 /// Le mot de passe est géré par Firebase Auth, le profil par l'API (MySQL).
 /// L'API renvoie ensuite son propre jeton, utilisé pour toutes les requêtes.
 ///
@@ -85,7 +100,33 @@ class AuthRepository {
 
   /// Crée le compte Firebase puis le profil. Le compte reste inactif jusqu'à
   /// la saisie du code envoyé par e-mail ([verifyEmail]).
+  ///
+  /// Si l'adresse a déjà un compte, envoie un lien de réinitialisation du
+  /// mot de passe et lève [AccountExistsException].
   Future<void> register(Registration data) async {
+    try {
+      await _register(data);
+    } on FirebaseAuthFailure catch (error) {
+      if (error.code != 'email-already-in-use') rethrow;
+      throw await _accountExists(data.email);
+    } on ApiException catch (error) {
+      if (error.code != 'email_taken') rethrow;
+      throw await _accountExists(data.email);
+    }
+  }
+
+  Future<AccountExistsException> _accountExists(String email) async {
+    try {
+      await sendPasswordReset(email);
+      return AccountExistsException(email, resetSent: true);
+    } catch (_) {
+      // Firebase absent ou injoignable : l'utilisateur peut toujours
+      // utiliser « Mot de passe oublié » depuis la connexion.
+      return AccountExistsException(email, resetSent: false);
+    }
+  }
+
+  Future<void> _register(Registration data) async {
     final String idToken;
     final bool createdNow;
     try {
@@ -107,9 +148,16 @@ class AuthRepository {
         'id_token': idToken,
         ..._profile(data),
       });
-    } catch (_) {
-      // Pas de compte Firebase orphelin si le profil n'a pas été enregistré.
-      if (createdNow) {
+    } catch (error) {
+      // Pas de compte Firebase orphelin si le profil a été refusé (4xx).
+      // Sans réponse (délai dépassé, réseau) ou sur 5xx, le profil a pu être
+      // enregistré : on garde le compte, une nouvelle tentative le reprendra.
+      final refused =
+          error is ApiException &&
+          error.statusCode != null &&
+          error.statusCode! >= 400 &&
+          error.statusCode! < 500;
+      if (createdNow && refused) {
         await _firebase.deleteCurrentAccount().catchError((_) {});
       }
       rethrow;

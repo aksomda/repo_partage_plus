@@ -27,8 +27,11 @@ class LocalStore {
   Future<T?> readSetting<T>(String key) async =>
       await _session.record(key).get(db) as T?;
 
-  Future<void> saveSetting(String key, Object? value) =>
-      _session.record(key).put(db, value);
+  /// [value] null efface le réglage (sembast refuse les valeurs null).
+  Future<void> saveSetting(String key, Object? value) async {
+    final record = _session.record(key);
+    value == null ? await record.delete(db) : await record.put(db, value);
+  }
 
   Stream<Object?> watchSetting(String key) =>
       _session.record(key).onSnapshot(db).map((record) => record?.value);
@@ -36,6 +39,8 @@ class LocalStore {
   // ---------- Instantané des données serveur ----------
 
   /// Enregistre chaque clé de la réponse GET /api/sync séparément.
+  /// Une clé à null (ex. `admin` pour un non-admin) efface la copie locale :
+  /// sembast refuse d'enregistrer null.
   Future<void> saveSnapshot(Map<String, dynamic> snapshot) {
     return db.transaction((txn) async {
       for (final entry in snapshot.entries) {

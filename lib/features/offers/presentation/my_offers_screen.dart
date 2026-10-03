@@ -71,7 +71,17 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
     final guest = ref.watch(guestOffersProvider).value ?? const <Json>[];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mes offres')),
+      appBar: AppBar(
+        // Toujours présent : après une publication, l'historique est remis
+        // à zéro, on revient alors à l'accueil.
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Retour',
+          onPressed: () =>
+              context.canPop() ? context.pop() : context.go(AppRoutes.home),
+        ),
+        title: const Text('Mes offres'),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.push(AppRoutes.createOffer),
         backgroundColor: AppColors.primary,
