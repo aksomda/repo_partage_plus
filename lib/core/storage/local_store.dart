@@ -45,7 +45,7 @@ class LocalStore {
     return db.transaction((txn) async {
       for (final entry in snapshot.entries) {
         // Correction erreur lors de la publication d'une offre
-        if(entry.value != null) {
+        if (entry.value != null) {
           await _snapshot.record(entry.key).put(txn, entry.value);
         } else {
           await _snapshot.record(entry.key).delete(txn);

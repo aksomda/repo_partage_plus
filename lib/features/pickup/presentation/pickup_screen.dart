@@ -88,11 +88,7 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
           );
           context.go(AppRoutes.myReservations);
         case Rejected(:final message):
-          showMessage(
-            context,
-            'Validation échouée : $message',
-            error: true,
-          );
+          showMessage(context, 'Validation échouée : $message', error: true);
       }
     } catch (e) {
       if (mounted) showMessage(context, e.toString(), error: true);
@@ -120,7 +116,9 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
   @override
   Widget build(BuildContext context) {
     final id = int.tryParse(widget.reservationId);
-    final reservation = id == null ? null : ref.watch(lookupReservationProvider(id));
+    final reservation = id == null
+        ? null
+        : ref.watch(lookupReservationProvider(id));
 
     return Scaffold(
       appBar: AppBar(
@@ -145,7 +143,8 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
               child: EmptyState(
                 icon: Icons.search_off,
                 title: 'Réservation introuvable',
-                message: 'La réservation n° ${widget.reservationId} est introuvable.',
+                message:
+                    'La réservation n° ${widget.reservationId} est introuvable.',
                 action: OutlinedButton(
                   onPressed: () => context.go(AppRoutes.myReservations),
                   child: const Text('Retour aux commandes'),
@@ -156,7 +155,10 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
               children: [
                 _HeaderSummary(reservation: reservation),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
                   child: SegmentedButton<_ValidationMode>(
                     segments: const [
                       ButtonSegment(
@@ -200,7 +202,8 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
                             key: const ValueKey('qr'),
                             scannerController: _scannerController,
                             loading: _loading,
-                            onDetect: (capture) => _onQrDetected(capture, reservation),
+                            onDetect: (capture) =>
+                                _onQrDetected(capture, reservation),
                           ),
                   ),
                 ),
@@ -247,7 +250,11 @@ class _HeaderSummary extends StatelessWidget {
           const SizedBox(height: 6),
           Row(
             children: [
-              const Icon(Icons.person_outline, size: 16, color: AppColors.textMuted),
+              const Icon(
+                Icons.person_outline,
+                size: 16,
+                color: AppColors.textMuted,
+              ),
               const SizedBox(width: 6),
               Text(
                 'Client : $beneficiaryName',
@@ -257,7 +264,11 @@ class _HeaderSummary extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              const Icon(Icons.inventory_2_outlined, size: 16, color: AppColors.textMuted),
+              const Icon(
+                Icons.inventory_2_outlined,
+                size: 16,
+                color: AppColors.textMuted,
+              ),
               const SizedBox(width: 6),
               Text(
                 'Qté : $quantity',
@@ -294,18 +305,11 @@ class _ManualInputView extends StatelessWidget {
         key: formKey,
         child: Column(
           children: [
-            const Icon(
-              Icons.dialpad,
-              size: 56,
-              color: AppColors.primary,
-            ),
+            const Icon(Icons.dialpad, size: 56, color: AppColors.primary),
             const SizedBox(height: 12),
             const Text(
               'Code de retrait',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 6),
             const Text(
@@ -389,10 +393,7 @@ class _QrScannerView extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        MobileScanner(
-          controller: scannerController,
-          onDetect: onDetect,
-        ),
+        MobileScanner(controller: scannerController, onDetect: onDetect),
         Center(
           child: Container(
             width: 240,

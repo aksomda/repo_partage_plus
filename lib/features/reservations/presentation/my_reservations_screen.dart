@@ -48,12 +48,14 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
         profile != null &&
         (profile['role'] == 'donor' || profile['role'] == 'admin');
 
-    final accountReservations =
-        loggedIn ? ref.watch(myReservationsProvider) : const <Json>[];
+    final accountReservations = loggedIn
+        ? ref.watch(myReservationsProvider)
+        : const <Json>[];
     final guestReservations =
         ref.watch(guestReservationsProvider).value ?? const <Json>[];
-    final receivedOrders =
-        isDonor ? ref.watch(receivedReservationsProvider) : const <Json>[];
+    final receivedOrders = isDonor
+        ? ref.watch(receivedReservationsProvider)
+        : const <Json>[];
 
     if (isDonor) {
       return DefaultTabController(
@@ -109,10 +111,7 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
           ),
           body: TabBarView(
             children: [
-              _ReceivedOrdersList(
-                orders: receivedOrders,
-                onRefresh: _refresh,
-              ),
+              _ReceivedOrdersList(orders: receivedOrders, onRefresh: _refresh),
               _MyReservationsList(
                 accountReservations: accountReservations,
                 guestReservations: guestReservations,
@@ -141,10 +140,7 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
 
 /// Vue de la liste des commandes reçues sur les offres d'un donateur.
 class _ReceivedOrdersList extends ConsumerWidget {
-  const _ReceivedOrdersList({
-    required this.orders,
-    required this.onRefresh,
-  });
+  const _ReceivedOrdersList({required this.orders, required this.onRefresh});
 
   final List<Json> orders;
   final RefreshCallback onRefresh;
@@ -387,16 +383,18 @@ class _ReceivedOrderTileState extends ConsumerState<_ReceivedOrderTile> {
                                     color: Colors.white,
                                   ),
                                 )
-                              : const Icon(Icons.check_circle_outline, size: 18),
+                              : const Icon(
+                                  Icons.check_circle_outline,
+                                  size: 18,
+                                ),
                           label: const Text('Confirmer la commande'),
                         ),
                       ),
                     if (status == 'confirmed')
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () => context.push(
-                            AppRoutes.pickup('${order['id']}'),
-                          ),
+                          onPressed: () =>
+                              context.push(AppRoutes.pickup('${order['id']}')),
                           icon: const Icon(Icons.qr_code_scanner, size: 18),
                           label: const Text('Valider le retrait'),
                         ),
@@ -438,8 +436,7 @@ class _MyReservationsList extends StatelessWidget {
             EmptyState(
               icon: Icons.event_note_outlined,
               title: 'Aucune réservation',
-              message:
-                  'Réservez une offre à proximité : elle apparaîtra ici.',
+              message: 'Réservez une offre à proximité : elle apparaîtra ici.',
               action: FilledButton(
                 onPressed: () => context.go(AppRoutes.home),
                 child: const Text('Voir les offres'),
