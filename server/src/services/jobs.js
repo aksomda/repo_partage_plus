@@ -1,5 +1,6 @@
 import { transaction } from '../db/pool.js';
 import { firestoreMirror } from './firestore_mirror.js';
+import { purgeFirebaseMails } from './mailer.js';
 import { notify } from './notifications.js';
 
 /** Délai avant le début du créneau à partir duquel on envoie le rappel. */
@@ -113,5 +114,7 @@ export async function runScheduledJobs() {
   });
   // Offres expirées, rappels et notifications créés par ces tâches.
   firestoreMirror.changed();
-  return result;
+  // Les e-mails (codes d'activation) ne restent pas dans Firestore.
+  const purgedMails = await purgeFirebaseMails();
+  return purgedMails > 0 ? { ...result, purged_mails: purgedMails } : result;
 }

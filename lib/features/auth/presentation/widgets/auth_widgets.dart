@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 
 /// Gabarit commun des écrans d'authentification : fond blanc, contenu
-/// centré et limité en largeur (tablette, web).
+/// centré et limité en largeur (tablette, web), logo Partage+ en tête.
 class AuthLayout extends StatelessWidget {
   const AuthLayout({
     super.key,
@@ -11,12 +12,16 @@ class AuthLayout extends StatelessWidget {
     this.title,
     this.onBack,
     this.maxWidth = 440,
+    this.showLogo = true,
   });
 
   final List<Widget> children;
 
   /// Largeur maximale du contenu (plus large pour un formulaire en grille).
   final double maxWidth;
+
+  /// Affiche le logo complet au-dessus du contenu.
+  final bool showLogo;
 
   /// Titre de la barre du haut (null : pas de barre, comme sur la maquette).
   final String? title;
@@ -46,7 +51,13 @@ class AuthLayout extends StatelessWidget {
               constraints: BoxConstraints(maxWidth: maxWidth),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: children,
+                children: [
+                  if (showLogo) ...[
+                    const Center(child: BrandLogo.full(size: 120)),
+                    const SizedBox(height: 24),
+                  ],
+                  ...children,
+                ],
               ),
             ),
           ),

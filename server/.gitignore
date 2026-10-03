@@ -3,3 +3,5 @@ node_modules/
 
 # Clés de compte de service Firebase : ne jamais committer.
 *firebase-adminsdk*.json
+extensions/
+.env

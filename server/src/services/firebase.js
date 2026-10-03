@@ -37,7 +37,15 @@ export function firebaseApp() {
 function firebaseAuth() {
   if (auth) return auth;
 
-  const app = firebaseApp();
+  let app;
+  try {
+    app = firebaseApp();
+  } catch (error) {
+    // Compte de service illisible (chemin erroné, JSON invalide) : c'est la
+    // configuration du serveur qui est en cause, pas la session.
+    console.error('Firebase : compte de service illisible :', error.message);
+    throw new HttpError(503, 'Firebase mal configuré sur le serveur (FIREBASE_SERVICE_ACCOUNT)');
+  }
   if (!app) {
     throw new HttpError(503, 'Authentification Firebase non configurée sur le serveur');
   }
@@ -51,11 +59,11 @@ function firebaseAuth() {
 const realGateway = {
   /** Vérifie un jeton d'identité Firebase et renvoie { uid, email }. */
   async verifyIdToken(idToken) {
+    const firebaseAuthClient = firebaseAuth();
     try {
-      const decoded = await firebaseAuth().verifyIdToken(idToken);
+      const decoded = await firebaseAuthClient.verifyIdToken(idToken);
       return { uid: decoded.uid, email: decoded.email?.toLowerCase() ?? null };
     } catch (error) {
-      if (error instanceof HttpError) throw error;
       // Firebase injoignable (réseau, panne) : ce n'est pas la session qui est en cause.
       if (/network|internal-error|unavailable|timeout/i.test(error?.code ?? '')) {
         throw new HttpError(503, 'Firebase momentanément indisponible : réessayez plus tard');

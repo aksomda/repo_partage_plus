@@ -101,6 +101,38 @@ void main() {
     });
 
     test(
+      'réponse perdue (délai dépassé) : le compte Firebase est conservé',
+      () async {
+        server.handler = (request) async => throw DioException.receiveTimeout(
+          timeout: const Duration(seconds: 30),
+          requestOptions: request,
+        );
+
+        await expectLater(
+          repository().register(registration),
+          throwsA(
+            isA<ApiException>().having((e) => e.isNetwork, 'isNetwork', isTrue),
+          ),
+        );
+        // Le profil a pu être enregistré : le compte doit rester utilisable.
+        expect(firebase.calls, isNot(contains('delete')));
+        expect(firebase.accounts, contains('awa@test.local'));
+      },
+    );
+
+    test('erreur serveur (5xx) : le compte Firebase est conservé', () async {
+      server.handler = (request) async =>
+          jsonResponse(500, {'error': 'Erreur interne'});
+
+      await expectLater(
+        repository().register(registration),
+        throwsA(isA<ApiException>()),
+      );
+      expect(firebase.calls, isNot(contains('delete')));
+      expect(firebase.accounts, contains('awa@test.local'));
+    });
+
+    test(
       'compte existant : lien de réinitialisation envoyé, sans suppression',
       () async {
         firebase.accounts['awa@test.local'] = 'autre-motdepasse1';

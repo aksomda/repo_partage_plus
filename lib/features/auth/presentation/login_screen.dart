@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
-import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
@@ -83,8 +82,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       onBack: () =>
           context.canPop() ? context.pop() : context.go(AppRoutes.home),
       children: [
-        const Center(child: BrandLogo(size: 32)),
-        const SizedBox(height: 32),
         const AuthHeading(
           title: 'Connexion',
           subtitle: 'Accédez à votre compte',

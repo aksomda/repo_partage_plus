@@ -1,1 +1,41 @@
-{"functions":[{"source":"functions","codebase":"default","ignore":["node_modules","test",".git","*.log"]}],"firestore":{"rules":"firestore.rules"},"flutter":{"platforms":{"android":{"default":{"projectId":"partageplus-f8840","appId":"1:179535500663:android:26d5ab83103c141932fd72","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"partageplus-f8840","configurations":{"android":"1:179535500663:android:26d5ab83103c141932fd72","ios":"1:179535500663:ios:b56f8e04dbe8fc8c32fd72","web":"1:179535500663:web:30b3c8552d8df13932fd72"}}}}}}
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        "test",
+        ".git",
+        "*.log"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "partageplus-f8840",
+          "appId": "1:179535500663:android:26d5ab83103c141932fd72",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "partageplus-f8840",
+          "configurations": {
+            "android": "1:179535500663:android:26d5ab83103c141932fd72",
+            "ios": "1:179535500663:ios:b56f8e04dbe8fc8c32fd72",
+            "web": "1:179535500663:web:30b3c8552d8df13932fd72"
+          }
+        }
+      }
+    }
+  },
+  "extensions": {
+    "firestore-send-email": "firebase/firestore-send-email@0.2.10"
+  }
+}

@@ -14,7 +14,9 @@ const { migrate } = await import('../src/db/migrate.js');
 const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
-const { sentMails } = await import('../src/services/mailer.js');
+const { purgeFirebaseMails, sentMails, setMailStore } = await import(
+  '../src/services/mailer.js'
+);
 const { flushFirestoreMirror, setFirestoreStore } = await import(
   '../src/services/firestore_mirror.js'
 );
@@ -946,6 +948,56 @@ describe('administration', () => {
   test("les routes admin sont interdites aux autres rôles", async () => {
     const res = await api.get('/api/admin/stats').set(as('donor'));
     assert.equal(res.status, 403);
+  });
+});
+
+describe('e-mails envoyés par Firebase (extension Trigger Email)', () => {
+  const firestoreMails = [];
+  let purgedBefore = null;
+
+  before(() => {
+    config.mail.transport = 'firebase';
+    setMailStore({
+      async add(document) {
+        firestoreMails.push(document);
+      },
+      async purge(before) {
+        purgedBefore = before;
+        return 0;
+      },
+    });
+  });
+
+  after(() => {
+    config.mail.transport = 'smtp';
+    setMailStore(null);
+  });
+
+  test('le code d’activation est déposé dans la collection mail', async () => {
+    const actors = (await api.get('/api/actors')).body;
+    const res = await api.post('/api/auth/register').send({
+      email: 'mail.firebase@test.local',
+      password: 'motdepasse1',
+      first_name: 'Awa',
+      last_name: 'Sawadogo',
+      gender: 'female',
+      age: 30,
+      phone: '+226 70 00 00 01',
+      actor_id: actors.find((actor) => actor.code === 'particulier').id,
+    });
+    assert.equal(res.status, 201, res.text);
+
+    const mail = firestoreMails.find((doc) => doc.to === 'mail.firebase@test.local');
+    assert.ok(mail, 'aucun document dans la collection mail');
+    assert.ok(mail.message.subject.length > 0);
+    assert.match(mail.message.text, /\b\d{6}\b/);
+    assert.ok(mail.created_at instanceof Date);
+  });
+
+  test('les e-mails de plus de 24 h sont retirés de Firestore', async () => {
+    const now = new Date('2026-10-02T12:00:00Z');
+    await purgeFirebaseMails(now);
+    assert.equal(purgedBefore.toISOString(), '2026-10-01T12:00:00.000Z');
   });
 });
 

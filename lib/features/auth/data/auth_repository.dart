@@ -148,9 +148,16 @@ class AuthRepository {
         'id_token': idToken,
         ..._profile(data),
       });
-    } catch (_) {
-      // Pas de compte Firebase orphelin si le profil n'a pas été enregistré.
-      if (createdNow) {
+    } catch (error) {
+      // Pas de compte Firebase orphelin si le profil a été refusé (4xx).
+      // Sans réponse (délai dépassé, réseau) ou sur 5xx, le profil a pu être
+      // enregistré : on garde le compte, une nouvelle tentative le reprendra.
+      final refused =
+          error is ApiException &&
+          error.statusCode != null &&
+          error.statusCode! >= 400 &&
+          error.statusCode! < 500;
+      if (createdNow && refused) {
         await _firebase.deleteCurrentAccount().catchError((_) {});
       }
       rethrow;

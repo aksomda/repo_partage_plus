@@ -2,6 +2,7 @@ import { app } from './app.js';
 import { config } from './config.js';
 import { firestoreMirror } from './services/firestore_mirror.js';
 import { runScheduledJobs } from './services/jobs.js';
+import { checkMailer } from './services/mailer.js';
 
 // Une erreur oubliée dans une tâche de fond (MySQL ou Firebase injoignable…)
 // est journalisée au lieu d'arrêter le serveur.
@@ -16,6 +17,7 @@ app.listen(config.port, () => {
       ? `Copie Firestore active (base ${config.firestore.databaseId}, toutes les tables)`
       : 'Copie Firestore désactivée : renseignez FIREBASE_SERVICE_ACCOUNT dans .env',
   );
+  checkMailer().then(console.log);
   // Rattrape ce qui a changé pendant l'arrêt (tout, la première fois).
   firestoreMirror.changed();
 });

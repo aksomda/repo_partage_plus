@@ -64,8 +64,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const SizedBox(height: 24),
-                    const Center(child: BrandLogo(size: 40)),
-                    const SizedBox(height: 48),
+                    const Center(child: BrandLogo.full(size: 220)),
+                    const SizedBox(height: 32),
                     Text(
                       'Ensemble contre le gaspillage\n'
                       'pour un avenir plus durable !',
