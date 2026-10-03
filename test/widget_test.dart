@@ -55,11 +55,12 @@ const users = [
 
 /// Texte propre à chaque écran implémenté (les autres affichent leur titre
 /// dans la barre du haut).
-const implementedScreens = {
+final implementedScreens = {
   AppRoutes.splash: 'Commencer',
   AppRoutes.login: 'Se connecter',
   AppRoutes.register: 'Choisissez votre rôle',
   AppRoutes.home: 'Publier une offre',
+  AppRoutes.pickup('1'): 'Valider le retrait',
 };
 
 Future<List<Override>> screenOverrides({
