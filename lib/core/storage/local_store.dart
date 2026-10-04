@@ -44,11 +44,11 @@ class LocalStore {
   Future<void> saveSnapshot(Map<String, dynamic> snapshot) {
     return db.transaction((txn) async {
       for (final entry in snapshot.entries) {
-        final record = _snapshot.record(entry.key);
-        if (entry.value == null) {
-          await record.delete(txn);
+        // Correction erreur lors de la publication d'une offre
+        if (entry.value != null) {
+          await _snapshot.record(entry.key).put(txn, entry.value);
         } else {
-          await record.put(txn, entry.value);
+          await _snapshot.record(entry.key).delete(txn);
         }
       }
       await _session
