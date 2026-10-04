@@ -224,6 +224,46 @@ void main() {
       expect(find.text('Vos informations'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, 'Traoré'), findsOneWidget);
     });
+
+    testWidgets('nom composé accepté ; mots de passe différents à ressaisir', (
+      tester,
+    ) async {
+      await pumpRoute(tester, AppRoutes.register);
+      await tester.tap(find.text('Particulier'));
+      await tester.pumpAndSettle();
+
+      Future<void> fill(String hint, String text) =>
+          tester.enterText(find.widgetWithText(TextFormField, hint), text);
+      await fill('Ouédraogo', 'K.SOMDA/HETIE');
+      await fill('8 caractères, lettres et chiffres', 'motdepasse1');
+      await fill('Saisissez-le à nouveau', 'motdepasse2');
+      await tester.ensureVisible(find.text('Suivant'));
+      await tester.tap(find.text('Suivant'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nom invalide'), findsNothing);
+      expect(
+        find.text('Les mots de passe ne correspondent pas'),
+        findsOneWidget,
+      );
+
+      // Corriger le premier champ efface l'erreur de la confirmation.
+      await fill('8 caractères, lettres et chiffres', 'motdepasse2');
+      await tester.pumpAndSettle();
+      expect(find.text('Les mots de passe ne correspondent pas'), findsNothing);
+      expect(find.text('Ressaisir le mot de passe'), findsNothing);
+
+      // De nouveau différents : « Ressaisir » vide les deux champs.
+      await fill('8 caractères, lettres et chiffres', 'autre1234');
+      await tester.tap(find.text('Suivant'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Ressaisir le mot de passe'));
+      await tester.tap(find.text('Ressaisir le mot de passe'));
+      await tester.pumpAndSettle();
+      expect(find.text('Les mots de passe ne correspondent pas'), findsNothing);
+      expect(find.widgetWithText(TextFormField, 'autre1234'), findsNothing);
+      expect(find.widgetWithText(TextFormField, 'motdepasse2'), findsNothing);
+    });
   });
 
   testWidgets('menu : écrans regroupés par bloc thématique', (tester) async {

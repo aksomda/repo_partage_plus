@@ -32,6 +32,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   final _code = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _passwordFocus = FocusNode();
   var _codeSent = false;
   var _loading = false;
   var _resendIn = 0;
@@ -42,6 +43,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _passwordFocus.dispose();
     for (final controller in [_email, _code, _password, _confirm]) {
       controller.dispose();
     }
@@ -174,6 +176,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                   label: 'Nouveau mot de passe',
                   child: PasswordField(
                     controller: _password,
+                    focusNode: _passwordFocus,
                     hint: '8 caractères, lettres et chiffres',
                     textInputAction: TextInputAction.next,
                     autofillHints: const [AutofillHints.newPassword],
@@ -182,14 +185,12 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
                 ),
                 LabeledField(
                   label: 'Confirmer le mot de passe',
-                  child: PasswordField(
+                  child: ConfirmPasswordField(
+                    password: _password,
                     controller: _confirm,
+                    passwordFocus: _passwordFocus,
                     hint: 'Le même mot de passe',
-                    textInputAction: TextInputAction.done,
                     onSubmitted: (_) => _reset(),
-                    validator: (value) => value == _password.text
-                        ? null
-                        : 'Les mots de passe ne correspondent pas',
                   ),
                 ),
               ],

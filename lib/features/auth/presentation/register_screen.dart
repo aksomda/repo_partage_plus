@@ -187,6 +187,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   final _phone = PhoneController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _passwordFocus = FocusNode();
   final _associationName = TextEditingController();
   final _associationNumber = TextEditingController();
   final _associationAddress = TextEditingController();
@@ -220,6 +221,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   @override
   void dispose() {
     _phone.dispose();
+    _passwordFocus.dispose();
     for (final controller in [
       _lastName,
       _firstName,
@@ -392,6 +394,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                   required: true,
                   child: PasswordField(
                     controller: _password,
+                    focusNode: _passwordFocus,
                     hint: '8 caractères, lettres et chiffres',
                     textInputAction: TextInputAction.next,
                     autofillHints: const [AutofillHints.newPassword],
@@ -401,20 +404,11 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                 LabeledField(
                   label: 'Confirmer le mot de passe',
                   required: true,
-                  child: PasswordField(
+                  child: ConfirmPasswordField(
+                    password: _password,
                     controller: _confirm,
-                    hint: 'Saisissez-le à nouveau',
-                    textInputAction: TextInputAction.done,
+                    passwordFocus: _passwordFocus,
                     onSubmitted: (_) => _next(),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Confirmation obligatoire';
-                      }
-                      if (value != _password.text) {
-                        return 'Les mots de passe ne correspondent pas';
-                      }
-                      return null;
-                    },
                   ),
                 ),
               ],
@@ -552,8 +546,9 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
     return null;
   };
 
-  /// Lettres (accents compris), espaces, tirets, apostrophes et points.
-  static final _namePattern = RegExp(r"^[\p{L} .'’-]+$", unicode: true);
+  /// Lettres (accents compris), espaces, tirets, apostrophes, points et
+  /// barres obliques (noms composés : « K.SOMDA/HETIE »).
+  static final _namePattern = RegExp(r"^[\p{L} .'’/-]+$", unicode: true);
 }
 
 /// Valeur saisie, affichée sans pouvoir la modifier.
