@@ -7,8 +7,7 @@ final List<AppNotification> mockNotifications = [
     id: 'notification_001',
     type: AppNotificationType.offer,
     title: 'Nouvelle offre favorite',
-    message:
-        'Boulangerie du Marché publie un panier à 1 500 FCFA, à 450 m.',
+    message: 'Boulangerie du Marché publie un panier à 1 500 FCFA, à 450 m.',
     createdAt: notificationNow.subtract(const Duration(minutes: 5)),
   ),
   AppNotification(
@@ -30,8 +29,7 @@ final List<AppNotification> mockNotifications = [
     id: 'notification_004',
     type: AppNotificationType.expiration,
     title: 'Expire bientôt',
-    message:
-        'Les yaourts gratuits de Supérette Faso expirent demain matin.',
+    message: 'Les yaourts gratuits de Supérette Faso expirent demain matin.',
     createdAt: notificationNow.subtract(const Duration(hours: 2)),
     isRead: true,
   ),
@@ -47,8 +45,7 @@ final List<AppNotification> mockNotifications = [
     id: 'notification_006',
     type: AppNotificationType.offer,
     title: '3 offres près de chez vous',
-    message:
-        'Selon vos préférences : plats cuisinés et fruits & légumes.',
+    message: 'Selon vos préférences : plats cuisinés et fruits & légumes.',
     createdAt: notificationNow.subtract(const Duration(days: 1, hours: 3)),
     isRead: true,
   ),

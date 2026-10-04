@@ -18,9 +18,7 @@ class NotificationTile extends StatelessWidget {
     final icon = _iconForType(notification.type);
 
     return Material(
-      color: notification.isRead
-          ? Colors.transparent
-          : color.withAlpha(18),
+      color: notification.isRead ? Colors.transparent : color.withAlpha(18),
       child: InkWell(
         onTap: onTap,
         child: Padding(
@@ -35,10 +33,7 @@ class NotificationTile extends StatelessWidget {
                   color: color.withAlpha(30),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  icon,
-                  color: color,
-                ),
+                child: Icon(icon, color: color),
               ),
               const SizedBox(width: 12),
               Expanded(

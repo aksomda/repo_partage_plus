@@ -5,8 +5,7 @@ import 'package:timezone/timezone.dart' as tz;
 class LocalNotificationService {
   LocalNotificationService._();
 
-  static final LocalNotificationService instance =
-      LocalNotificationService._();
+  static final LocalNotificationService instance = LocalNotificationService._();
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
@@ -48,8 +47,10 @@ class LocalNotificationService {
       importance: Importance.high,
     );
 
-    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
 
     await androidPlugin?.createNotificationChannel(androidChannel);
   }

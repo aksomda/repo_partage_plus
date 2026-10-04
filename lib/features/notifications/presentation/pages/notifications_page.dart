@@ -15,12 +15,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   late List<AppNotification> _notifications;
   String _selectedFilter = 'Toutes';
 
-  final List<String> _filters = [
-    'Toutes',
-    'Offres',
-    'Réservations',
-    'Impact',
-  ];
+  final List<String> _filters = ['Toutes', 'Offres', 'Réservations', 'Impact'];
 
   @override
   void initState() {
@@ -36,10 +31,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       appBar: AppBar(
         title: const Text('Notifications'),
         actions: [
-          TextButton(
-            onPressed: _markAllAsRead,
-            child: const Text('Tout lire'),
-          ),
+          TextButton(onPressed: _markAllAsRead, child: const Text('Tout lire')),
         ],
       ),
       body: Column(
@@ -70,10 +62,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return SizedBox(
       height: 56,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 8,
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         scrollDirection: Axis.horizontal,
         itemCount: _filters.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
@@ -99,23 +88,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.notifications_none_outlined,
-            size: 56,
-            color: Colors.grey,
-          ),
+          Icon(Icons.notifications_none_outlined, size: 56, color: Colors.grey),
           SizedBox(height: 12),
           Text(
             'Aucune notification',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           SizedBox(height: 6),
-          Text(
-            'Les nouvelles alertes apparaîtront ici.',
-          ),
+          Text('Les nouvelles alertes apparaîtront ici.'),
         ],
       ),
     );
@@ -144,8 +124,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       case 'Impact':
         return _notifications
             .where(
-              (notification) =>
-                  notification.type == AppNotificationType.impact,
+              (notification) => notification.type == AppNotificationType.impact,
             )
             .toList();
 
@@ -169,9 +148,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   void _markAllAsRead() {
     setState(() {
       _notifications = _notifications
-          .map(
-            (notification) => notification.copyWith(isRead: true),
-          )
+          .map((notification) => notification.copyWith(isRead: true))
           .toList();
     });
 

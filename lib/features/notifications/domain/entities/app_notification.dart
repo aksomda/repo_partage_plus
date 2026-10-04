@@ -1,10 +1,4 @@
-enum AppNotificationType {
-  offer,
-  reservation,
-  reminder,
-  expiration,
-  impact,
-}
+enum AppNotificationType { offer, reservation, reminder, expiration, impact }
 
 class AppNotification {
   final String id;
@@ -23,9 +17,7 @@ class AppNotification {
     this.isRead = false,
   });
 
-  AppNotification copyWith({
-    bool? isRead,
-  }) {
+  AppNotification copyWith({bool? isRead}) {
     return AppNotification(
       id: id,
       type: type,
