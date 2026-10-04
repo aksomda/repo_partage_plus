@@ -18,6 +18,10 @@ bool isOfferAvailable(Json offer, DateTime now) {
       !DateTime.parse(offer['expiry_date'] as String).isBefore(today);
 }
 
+/// Offre publiée sans compte : pas de réservation, on appelle le donateur.
+bool isGuestOffer(Json offer) =>
+    offer['is_guest'] == 1 || offer['is_guest'] == true;
+
 /// Retire des quantités affichées ce que l'utilisateur a réservé hors ligne.
 List<Json> applyPendingReservations(
   List<Json> offers,

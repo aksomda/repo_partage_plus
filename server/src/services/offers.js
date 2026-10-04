@@ -18,14 +18,33 @@ export const PHOTO_PATH = `IF(o.photo_updated_at IS NULL, NULL,
  * `is_guest` : publiée sans compte ; `contact_phone` : téléphone de l'invité,
  * seul moyen de le joindre (celui d'un compte n'est donné qu'après réservation).
  */
-export const OFFER_SELECT = `
-  SELECT o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
+const OFFER_FIELDS = `o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
          o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone,
-         ${PHOTO_PATH} AS photo_path
+         ${PHOTO_PATH} AS photo_path`;
+
+const OFFER_JOINS = `
   FROM offers o
   JOIN categories c ON c.id = o.category_id
   LEFT JOIN users u ON u.id = o.donor_id
   LEFT JOIN actors pa ON pa.id = u.actor_id`;
+
+export const OFFER_SELECT = `SELECT ${OFFER_FIELDS} ${OFFER_JOINS}`;
+
+/** Avec l'e-mail de contact (privé) : réservé au publieur. */
+export const OWN_OFFER_SELECT = `SELECT ${OFFER_FIELDS}, oc.email AS contact_email ${OFFER_JOINS}
+  LEFT JOIN offer_contacts oc ON oc.offer_id = o.id`;
+
+/** Enregistre (ou efface, si vide) l'e-mail de contact privé de l'offre. */
+export async function saveContactEmail(conn, offerId, email) {
+  if (email) {
+    await conn.query(
+      'INSERT INTO offer_contacts (offer_id, email) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email)',
+      [offerId, email],
+    );
+  } else {
+    await conn.query('DELETE FROM offer_contacts WHERE offer_id = ?', [offerId]);
+  }
+}
 
 /** Offre visible et réservable par les bénéficiaires. */
 export const OFFER_AVAILABLE = `

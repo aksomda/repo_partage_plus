@@ -11,6 +11,7 @@ import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
 import 'package:repo_partage_plus/core/storage/database_opener.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/core/widgets/friendly_error.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,8 +52,8 @@ Future<void> main() async {
 }
 
 /// Une erreur imprévue (réseau, Firebase, serveur…) est journalisée sans
-/// fermer l'application ; un widget en erreur affiche un message sobre au
-/// lieu de l'écran rouge (en version publiée).
+/// fermer l'application ; un widget en erreur affiche un message convivial
+/// au lieu de l'écran rouge.
 void _keepRunningOnErrors() {
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -62,18 +63,5 @@ void _keepRunningOnErrors() {
     debugPrint('Erreur non gérée (l’application continue) : $error');
     return true;
   };
-  if (kReleaseMode) {
-    ErrorWidget.builder = (details) => const Material(
-      color: Colors.transparent,
-      child: Center(
-        child: Padding(
-          padding: EdgeInsets.all(16),
-          child: Text(
-            'Contenu momentanément indisponible',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
-    );
-  }
+  ErrorWidget.builder = (details) => FriendlyErrorWidget(details: details);
 }

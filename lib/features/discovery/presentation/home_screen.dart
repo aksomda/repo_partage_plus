@@ -36,7 +36,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandLogo(size: 20, showTagline: false),
+        // Sans compte : le logo ramène à l'écran d'accueil du démarrage.
+        title: loggedIn
+            ? const BrandLogo(size: 20, showTagline: false)
+            : Tooltip(
+                message: 'Retour à l’accueil',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppTheme.radius),
+                  onTap: () => context.go(AppRoutes.splash),
+                  child: const BrandLogo(size: 20, showTagline: false),
+                ),
+              ),
         actions: [
           IconButton(
             tooltip: 'Recommandations',

@@ -9,11 +9,12 @@ import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam } from '../http/validation.js';
 import {
   guestName,
-  guestRateLimit,
+  assertGuestQuota,
   guestSchema,
   guestTokenOf,
   hasGuestAccess,
   issueGuestToken,
+  recordGuestSubmission,
 } from '../services/guests.js';
 import { notify } from '../services/notifications.js';
 
@@ -108,10 +109,12 @@ async function completeOfferIfDone(conn, offerId) {
   );
 }
 
-// Réserver une offre, avec ou sans compte (association : validée seulement).
-reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (req, res) => {
+// Réserver une offre publiée par un compte, avec ou sans compte (association :
+// validée seulement). L'offre d'un invité ne se réserve pas : on l'appelle.
+reservationsRouter.post('/', optionalAuth, async (req, res) => {
   const data = createSchema.parse(req.body);
   const guest = req.user ? null : guestReservationSchema.parse(req.body).guest;
+  if (guest) await assertGuestQuota('reservation', guest.phone, req.ip);
 
   if (req.user?.role === 'admin') {
     throw new HttpError(403, 'Un administrateur ne réserve pas d’offres');
@@ -135,6 +138,15 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
     if (!offer || offer.status !== 'published' || !offer.still_valid) {
       throw new HttpError(409, 'Offre indisponible');
     }
+    // Publiée sans compte : personne ne pourrait confirmer ni valider le
+    // retrait dans l'application, le bénéficiaire appelle le donateur.
+    if (offer.donor_id === null) {
+      throw new HttpError(
+        409,
+        `Offre publiée sans compte : appelez le donateur au ${offer.guest_phone}`,
+        { code: 'guest_offer_call', phone: offer.guest_phone },
+      );
+    }
     if (req.user && offer.donor_id === req.user.id) {
       throw new HttpError(409, 'Impossible de réserver sa propre offre');
     }
@@ -157,9 +169,6 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
     );
     if (existing) throw new HttpError(409, 'Vous avez déjà une réservation sur cette offre');
 
-    // Offre d'invité : personne ne peut confirmer dans l'application,
-    // la réservation est confirmée d'office et le retrait se règle par téléphone.
-    const autoConfirmed = offer.donor_id === null;
     const pickupCode = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const [result] = await conn.query('INSERT INTO reservations SET ?', [
       {
@@ -172,10 +181,10 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
         amount,
         payment_reference: amount > 0 ? data.payment_reference : null,
         pickup_code: pickupCode,
-        status: autoConfirmed ? 'confirmed' : 'pending',
-        confirmed_at: autoConfirmed ? new Date() : null,
+        status: 'pending',
       },
     ]);
+    if (guest) await recordGuestSubmission(conn, 'reservation', guest.phone, req.ip);
 
     await conn.query(
       `UPDATE offers

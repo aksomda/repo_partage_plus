@@ -258,6 +258,26 @@ class Geocoder {
       return null;
     }
   }
+
+  /// Code ISO du pays (ex. `BF`), ou null si inconnu ou hors ligne.
+  Future<String?> countryCodeOf(double lat, double lng) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/reverse',
+        queryParameters: {
+          'lat': lat,
+          'lon': lng,
+          'format': 'jsonv2',
+          'zoom': 3,
+        },
+      );
+      final address = response.data?['address'];
+      final code = address is Map ? address['country_code'] : null;
+      return code is String ? code.toUpperCase() : null;
+    } on DioException {
+      return null;
+    }
+  }
 }
 
 final geocoderProvider = Provider<Geocoder>((ref) => Geocoder());

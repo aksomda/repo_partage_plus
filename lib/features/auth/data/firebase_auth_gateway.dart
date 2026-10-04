@@ -90,6 +90,12 @@ class FirebaseAuthGateway implements AuthGateway {
     }
   }
 
+  /// Distinct du message « Serveur injoignable » de notre API, pour savoir
+  /// laquelle des deux étapes de la connexion a échoué.
+  static const _unreachable =
+      'Firebase injoignable : connexion Internet coupée ou trop lente. '
+      'Réessayez dans un instant';
+
   static String _message(String code) => switch (code) {
     'email-already-in-use' => 'Un compte existe déjà avec cette adresse e-mail',
     'invalid-email' => 'Adresse e-mail invalide',
@@ -100,7 +106,7 @@ class FirebaseAuthGateway implements AuthGateway {
     'user-disabled' => 'Compte désactivé par l’administrateur',
     'too-many-requests' =>
       'Trop de tentatives : réessayez dans quelques minutes',
-    'network-request-failed' => 'Connexion Internet requise',
+    'network-request-failed' => _unreachable,
     _ => 'Erreur d’authentification ($code)',
   };
 }
@@ -141,7 +147,7 @@ class RestAuthGateway implements AuthGateway {
       if (error.response == null) {
         throw const FirebaseAuthFailure(
           'network-request-failed',
-          'Connexion Internet requise',
+          FirebaseAuthGateway._unreachable,
         );
       }
       final code = _codes[googleErrorCode(error)] ?? 'unknown';

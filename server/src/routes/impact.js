@@ -8,7 +8,7 @@ import { firestoreMirror } from '../services/firestore_mirror.js';
 export const impactRouter = Router();
 
 /** Poids sauvé par une réservation : part du poids de l'offre réservée. */
-const SAVED_KG = 'o.weight_kg * r.quantity / o.initial_quantity';
+const SAVED_KG = 'COALESCE(o.weight_kg, 0) * r.quantity / o.initial_quantity';
 
 /** Mesures communes : retraits, produits, kg, CO2 et repas. */
 const MEASURES = `
@@ -193,6 +193,25 @@ impactRouter.get('/me/by-category', authenticate, async (req, res) => {
 impactRouter.get('/me/monthly', authenticate, async (req, res) => {
   res.json(await monthly(MINE, [req.user.id, req.user.id], new Date()));
 });
+
+/**
+ * Impact de toute la plateforme (écran « Impact » de l'administrateur) :
+ * totaux, évolution sur 12 mois et répartition par catégorie.
+ */
+export async function buildGlobalImpact(now = new Date()) {
+  const [[totals], [users], months, categories] = await Promise.all([
+    query(IMPACT_SELECT),
+    query("SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'"),
+    monthly('', [], now),
+    byCategory('', []),
+  ]);
+  return {
+    as_of: now.toISOString(),
+    impact: { ...formatImpact(totals), users: Number(users.count) },
+    monthly: months,
+    by_category: categories,
+  };
+}
 
 // Impact global de la plateforme (public, pour l'écran d'accueil et la démo).
 impactRouter.get('/global', async (req, res) => {

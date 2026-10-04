@@ -118,8 +118,8 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
                 icon: Icons.volunteer_activism_outlined,
                 title: 'Aucune publication',
                 message:
-                    'Publiez vos invendus ou surplus : ils seront visibles '
-                    'après validation.',
+                    'Publiez vos invendus ou surplus : ils sont visibles '
+                    'tout de suite.',
               ),
             for (final offer in account)
               _OfferTile(
@@ -184,11 +184,13 @@ class _OfferTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     StatusBadge(status),
-                    if (status == 'pending')
-                      const Text(
-                        'Visible après validation par un modérateur',
-                        style: TextStyle(
-                          color: AppColors.textMuted,
+                    if (status == 'rejected' &&
+                        offer['moderation_reason'] != null)
+                      Text(
+                        'Retirée par l’administrateur : '
+                        '${offer['moderation_reason']}',
+                        style: const TextStyle(
+                          color: AppColors.danger,
                           fontSize: 12,
                         ),
                       ),

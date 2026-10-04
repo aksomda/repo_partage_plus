@@ -13,11 +13,12 @@ import {
   pagination,
 } from '../http/validation.js';
 import {
-  guestRateLimit,
+  assertGuestQuota,
   guestSchema,
   guestTokenOf,
   hasGuestAccess,
   issueGuestToken,
+  recordGuestSubmission,
 } from '../services/guests.js';
 import { notify } from '../services/notifications.js';
 import { photoSchema, savePhoto } from '../services/photos.js';
@@ -27,6 +28,8 @@ import {
   PUBLISHER_TYPE,
   OFFER_AVAILABLE,
   OFFER_SELECT,
+  OWN_OFFER_SELECT,
+  saveContactEmail,
 } from '../services/offers.js';
 
 export const offersRouter = Router();
@@ -38,10 +41,20 @@ const offerSchema = z
     description: z.string().trim().max(2000).optional(),
     quantity: z.coerce.number().int().min(1).max(10000),
     unit: z.string().trim().min(1).max(30).default('portion'),
-    weight_kg: z.coerce.number().positive().max(10000),
+    // Facultatif : vide ou absent = inconnu.
+    weight_kg: z.preprocess(
+      (value) => (value === '' ? null : value),
+      z.coerce.number().positive().max(10000).nullable().optional(),
+    ),
     // Prix par unité en F CFA ; 0 = don gratuit.
     price: z.coerce.number().min(0).max(10_000_000).default(0),
     payment_info: z.string().trim().max(255).nullable().optional(),
+    contact_email: z.preprocess(
+      (value) => (value === '' ? null : value),
+      z.string().trim().toLowerCase().email('Adresse e-mail invalide').max(255).nullable().optional(),
+    ),
+    country_code: z.string().trim().regex(/^[A-Za-z]{2}$/).toUpperCase().nullable().optional(),
+    country_name: z.string().trim().max(80).nullable().optional(),
     expiry_date: isoDate,
     pickup_start: z.coerce.date(),
     pickup_end: z.coerce.date(),
@@ -201,13 +214,14 @@ offersRouter.get('/:id', optionalAuth, async (req, res) => {
   res.json(offer);
 });
 
-// Création, avec ou sans compte : l'offre attend la validation d'un modérateur.
-offersRouter.post('/', optionalAuth, guestRateLimit({ max: 10 }), async (req, res) => {
+// Création, avec ou sans compte : visible tout de suite (l'administrateur retire les abus).
+offersRouter.post('/', optionalAuth, async (req, res) => {
   if (req.user?.role === 'admin') {
     throw new HttpError(403, 'Un administrateur ne publie pas d’offres');
   }
   const data = offerSchema.parse(req.body);
   const guest = req.user ? null : guestOfferSchema.parse(req.body).guest;
+  if (guest) await assertGuestQuota('offer', guest.phone, req.ip);
 
   const { offerId, guestToken } = await transaction(async (conn) => {
     const [result] = await conn.query('INSERT INTO offers SET ?', [
@@ -222,9 +236,13 @@ offersRouter.post('/', optionalAuth, guestRateLimit({ max: 10 }), async (req, re
         initial_quantity: data.quantity,
         quantity_available: data.quantity,
         unit: data.unit,
-        weight_kg: data.weight_kg,
+        weight_kg: data.weight_kg ?? null,
         price: data.price,
         payment_info: data.price > 0 ? data.payment_info : null,
+        country_code: data.country_code ?? null,
+        country_name: data.country_name ?? null,
+        // Visible tout de suite : l'administrateur retire après coup les abus.
+        status: 'published',
         expiry_date: data.expiry_date,
         pickup_start: data.pickup_start,
         pickup_end: data.pickup_end,
@@ -234,13 +252,15 @@ offersRouter.post('/', optionalAuth, guestRateLimit({ max: 10 }), async (req, re
       },
     ]);
     await savePhoto(conn, result.insertId, data.photo);
+    await saveContactEmail(conn, result.insertId, data.contact_email);
+    if (guest) await recordGuestSubmission(conn, 'offer', guest.phone, req.ip);
     return {
       offerId: result.insertId,
       guestToken: guest ? await issueGuestToken(conn, 'offer', result.insertId) : null,
     };
   });
 
-  const [offer] = await query(`${OFFER_SELECT} WHERE o.id = ?`, [offerId]);
+  const [offer] = await query(`${OWN_OFFER_SELECT} WHERE o.id = ?`, [offerId]);
   // Le jeton n'est remis qu'une fois : l'application le garde sur l'appareil.
   res.status(201).json(guestToken ? { ...offer, guest_token: guestToken } : offer);
 });
@@ -251,7 +271,8 @@ offersRouter.put('/:id', authenticate, async (req, res) => {
   const data = offerSchema.parse(req.body);
   const offer = await loadOwnOffer(offerId, req);
 
-  if (!['pending', 'published', 'rejected'].includes(offer.status)) {
+  // Offre retirée par l'administrateur : plus modifiable (pas de republication).
+  if (!['pending', 'published'].includes(offer.status)) {
     throw new HttpError(409, `Offre non modifiable (statut : ${offer.status})`);
   }
   if (offer.quantity_available !== offer.initial_quantity) {
@@ -262,9 +283,10 @@ offersRouter.put('/:id', authenticate, async (req, res) => {
     await conn.query(
       `UPDATE offers SET category_id = ?, title = ?, description = ?, initial_quantity = ?,
          quantity_available = ?, unit = ?, weight_kg = ?, price = ?, payment_info = ?,
+         country_code = ?, country_name = ?,
          expiry_date = ?, pickup_start = ?,
          pickup_end = ?, address = ?, latitude = ?, longitude = ?,
-         status = 'pending', moderation_reason = NULL, expiry_notified_at = NULL
+         status = 'published', expiry_notified_at = NULL
        WHERE id = ?`,
       [
         data.category_id,
@@ -273,9 +295,11 @@ offersRouter.put('/:id', authenticate, async (req, res) => {
         data.quantity,
         data.quantity,
         data.unit,
-        data.weight_kg,
+        data.weight_kg ?? null,
         data.price,
         data.price > 0 ? data.payment_info : null,
+        data.country_code ?? offer.country_code,
+        data.country_name ?? offer.country_name,
         data.expiry_date,
         data.pickup_start,
         data.pickup_end,
@@ -286,9 +310,10 @@ offersRouter.put('/:id', authenticate, async (req, res) => {
       ],
     );
     await savePhoto(conn, offerId, data.photo);
+    await saveContactEmail(conn, offerId, data.contact_email);
   });
 
-  const [updated] = await query(`${OFFER_SELECT} WHERE o.id = ?`, [offerId]);
+  const [updated] = await query(`${OWN_OFFER_SELECT} WHERE o.id = ?`, [offerId]);
   res.json(updated);
 });
 

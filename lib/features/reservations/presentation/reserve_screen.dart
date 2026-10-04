@@ -14,7 +14,7 @@ import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
-/// Réservation d'une offre, avec ou sans compte. Offre payante : paiement
+/// Réservation d'une offre publiée par un compte, avec ou sans compte. Offre payante : paiement
 /// hors application, puis saisie de la référence de la transaction.
 class ReserveScreen extends ConsumerWidget {
   const ReserveScreen({super.key, required this.offerId});
@@ -27,7 +27,17 @@ class ReserveScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Réserver')),
       body: offer.when(
-        data: (data) => _ReserveForm(offer: data),
+        data: (data) => isGuestOffer(data)
+            ? Center(
+                child: EmptyState(
+                  icon: Icons.call_outlined,
+                  title: 'Offre publiée sans compte',
+                  message:
+                      'Elle ne se réserve pas : appelez le donateur au '
+                      '${data['contact_phone'] ?? ''} pour convenir du retrait.',
+                ),
+              )
+            : _ReserveForm(offer: data),
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(
           child: EmptyState(

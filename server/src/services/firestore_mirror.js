@@ -18,7 +18,7 @@ import { firebaseApp } from './firebase.js';
 /**
  * Tables copiées, avec les colonnes à ne jamais sortir de MySQL.
  * Non copiées : email_otps, guest_tokens (secrets), idempotency_keys
- * (technique) et offer_photos (images trop lourdes pour Firestore).
+ * (technique), offer_photos et message_photos (images trop lourdes pour Firestore).
  */
 export const MIRRORED_TABLES = {
   actors: {},
@@ -29,6 +29,7 @@ export const MIRRORED_TABLES = {
   offers: {},
   reservations: {},
   notifications: {},
+  messages: {},
 };
 
 /**
@@ -78,6 +79,10 @@ const realStore = {
     const snap = await firestore().collection(collection).doc(String(id)).get();
     return snap.exists ? snap.data() : null;
   },
+  async readAll(collection) {
+    const snap = await firestore().collection(collection).get();
+    return snap.docs.map((doc) => doc.data());
+  },
   async readState() {
     const snap = await firestore().collection(STATE.collection).doc(STATE.doc).get();
     return snap.exists ? (snap.get('last_sync')?.toDate?.() ?? null) : null;
@@ -93,6 +98,15 @@ let enabled = config.firestore.enabled;
 let lastSync;
 let queue = Promise.resolve();
 let pending = false;
+
+/** Dates Firestore (Timestamp) relues en chaînes ISO, comme celles de MySQL. */
+function plainDates(doc) {
+  const out = {};
+  for (const [key, value] of Object.entries(doc)) {
+    out[key] = typeof value?.toDate === 'function' ? value.toDate().toISOString() : value;
+  }
+  return out;
+}
 
 function withoutSecrets(table, rows) {
   const { omit = [] } = MIRRORED_TABLES[table];
@@ -183,6 +197,24 @@ export const firestoreMirror = {
   async readUser(userId) {
     if (!enabled) return null;
     return store.readDoc('users', userId);
+  },
+
+  /**
+   * Comptes copiés (sans mot de passe), avec le libellé de leur acteur, pour
+   * la gestion des utilisateurs quand MySQL est indisponible. Plus récents
+   * d'abord. null : Firestore non configuré.
+   */
+  async listUsers() {
+    if (!enabled) return null;
+    const [users, actors] = await Promise.all([store.readAll('users'), store.readAll('actors')]);
+    const labels = new Map(actors.map((actor) => [String(actor.id), actor.label]));
+    return users
+      .map((user) => {
+        const row = withoutSecrets('users', [plainDates(user)])[0];
+        delete row.firebase_uid;
+        return { ...row, actor_label: labels.get(String(row.actor_id)) ?? null };
+      })
+      .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
   },
 
   /**

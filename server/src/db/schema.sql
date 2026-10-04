@@ -49,10 +49,11 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT fk_users_actor FOREIGN KEY (actor_id) REFERENCES actors (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- Codes d'activation envoyés par e-mail après l'inscription (stockés hachés).
+-- Codes envoyés par e-mail : activation du compte, réinitialisation du mot de passe (stockés hachés).
 CREATE TABLE IF NOT EXISTS email_otps (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id INT UNSIGNED NOT NULL,
+  purpose ENUM('activation', 'password_reset') NOT NULL DEFAULT 'activation',
   code_hash CHAR(64) NOT NULL,
   expires_at DATETIME NOT NULL,
   attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -114,10 +115,14 @@ CREATE TABLE IF NOT EXISTS offers (
   initial_quantity INT UNSIGNED NOT NULL,
   quantity_available INT UNSIGNED NOT NULL,
   unit VARCHAR(30) NOT NULL DEFAULT 'portion',
-  weight_kg DECIMAL(8, 2) NOT NULL,
+  -- Facultatif : sert au calcul de l'impact quand il est connu.
+  weight_kg DECIMAL(8, 2) NULL,
   -- Prix par unité en F CFA (0 = don gratuit), payé hors application.
   price DECIMAL(10, 2) NOT NULL DEFAULT 0,
   payment_info VARCHAR(255) NULL,
+  -- Pays du publieur (d'après sa position au moment de la publication).
+  country_code CHAR(2) NULL,
+  country_name VARCHAR(80) NULL,
   expiry_date DATE NOT NULL,
   pickup_start DATETIME NOT NULL,
   pickup_end DATETIME NOT NULL,
@@ -127,7 +132,7 @@ CREATE TABLE IF NOT EXISTS offers (
   -- Date de la photo (NULL : pas de photo) ; le fichier est dans offer_photos.
   photo_updated_at DATETIME NULL,
   status ENUM('pending', 'published', 'rejected', 'reserved', 'completed', 'expired', 'cancelled')
-    NOT NULL DEFAULT 'pending',
+    NOT NULL DEFAULT 'published',
   moderation_reason VARCHAR(255) NULL,
   moderated_by INT UNSIGNED NULL,
   moderated_at DATETIME NULL,
@@ -176,6 +181,14 @@ CREATE TABLE IF NOT EXISTS reservations (
   CONSTRAINT fk_reservations_beneficiary FOREIGN KEY (beneficiary_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- E-mail facultatif du publieur, prévenu si l'offre est retirée par
+-- l'administrateur. À part : jamais renvoyé par les SELECT o.* publics.
+CREATE TABLE IF NOT EXISTS offer_contacts (
+  offer_id INT UNSIGNED NOT NULL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL,
+  CONSTRAINT fk_offer_contacts_offer FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 -- Jetons remis à un invité pour revoir ou annuler sa publication / réservation
 -- depuis son appareil (stockés hachés, jamais renvoyés par les SELECT o.* / r.*).
 CREATE TABLE IF NOT EXISTS guest_tokens (
@@ -184,6 +197,27 @@ CREATE TABLE IF NOT EXISTS guest_tokens (
   token_hash CHAR(64) NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (kind, target_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Publications et réservations sans compte, pour le quota réglé par
+-- l'administrateur (par téléphone et par adresse IP). Jamais exposé.
+CREATE TABLE IF NOT EXISTS guest_submissions (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  kind ENUM('offer', 'reservation') NOT NULL,
+  -- Numéro réduit aux chiffres (et +) : « +226 70 » et « +22670 » comptent ensemble.
+  phone VARCHAR(30) NOT NULL,
+  ip VARCHAR(45) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_guest_submissions_phone (kind, phone, created_at),
+  KEY idx_guest_submissions_ip (kind, ip, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Paramètres réglables par l'administrateur (valeurs par défaut dans
+-- services/settings.js : une ligne n'existe qu'une fois modifiée).
+CREATE TABLE IF NOT EXISTS settings (
+  name VARCHAR(64) NOT NULL PRIMARY KEY,
+  value INT NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- Réponses déjà envoyées, par clé Idempotency-Key : une action rejouée par
@@ -212,4 +246,32 @@ CREATE TABLE IF NOT EXISTS notifications (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_notifications_user (user_id, read_at),
   CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Mini chat entre un utilisateur (avec compte) et l'administration : une
+-- conversation par utilisateur (user_id), messages texte et/ou images.
+CREATE TABLE IF NOT EXISTS messages (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  sender_id INT UNSIGNED NOT NULL,
+  from_admin TINYINT(1) NOT NULL DEFAULT 0,
+  body VARCHAR(2000) NULL,
+  photos_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  -- Lu par le destinataire (l'utilisateur, ou un administrateur).
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_messages_user (user_id, id),
+  CONSTRAINT fk_messages_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_messages_sender FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Images jointes à un message (images uniquement : JPEG, PNG ou WebP).
+CREATE TABLE IF NOT EXISTS message_photos (
+  message_id INT UNSIGNED NOT NULL,
+  position TINYINT UNSIGNED NOT NULL,
+  mime VARCHAR(30) NOT NULL,
+  data MEDIUMBLOB NOT NULL,
+  PRIMARY KEY (message_id, position),
+  CONSTRAINT fk_message_photos_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

@@ -7,6 +7,6 @@ class AdminDashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const PlaceholderScreen(title: 'Administration');
+    return const PlaceholderScreen(title: 'Tableau de bord');
   }
 }

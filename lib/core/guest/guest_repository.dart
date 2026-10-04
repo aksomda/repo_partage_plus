@@ -176,7 +176,7 @@ class GuestRepository {
       return data is Map ? Map<String, dynamic>.from(data) : const {};
     } on DioException catch (error) {
       if (error.response == null) {
-        throw ApiException('Connexion Internet requise');
+        throw ApiException.unreachable();
       }
       throw ApiException.fromDio(error);
     }

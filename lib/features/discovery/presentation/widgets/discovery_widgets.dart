@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
@@ -192,24 +193,60 @@ class OriginBar extends ConsumerWidget {
 /// Rayons de recherche proposés, en km.
 const searchRadii = [2.0, 5.0, 10.0, 25.0, 50.0];
 
+/// Auteur des offres affichées.
+enum OfferOwner { all, mine, others }
+
 /// Filtres de la liste d'offres.
 class OfferFilters {
-  const OfferFilters({this.text = '', this.categoryId, this.radiusKm = 10});
+  const OfferFilters({
+    this.text = '',
+    this.categoryId,
+    this.radiusKm = 10,
+    this.owner = OfferOwner.all,
+  });
 
   final String text;
   final int? categoryId;
   final double radiusKm;
+  final OfferOwner owner;
 
   OfferFilters copyWith({
     String? text,
     int? Function()? categoryId,
     double? radiusKm,
+    OfferOwner? owner,
   }) {
     return OfferFilters(
       text: text ?? this.text,
       categoryId: categoryId == null ? this.categoryId : categoryId(),
       radiusKm: radiusKm ?? this.radiusKm,
+      owner: owner ?? this.owner,
     );
+  }
+}
+
+/// Applique le filtre d'auteur puis [filterOffers].
+///
+/// [mine] : offres de l'utilisateur (compte et invité), tous statuts
+/// (terminées et retirées comprises) ; affichées sans contrainte de rayon.
+List<Json> filterOffersByOwner({
+  required List<Json> available,
+  required List<Json> mine,
+  required Place? origin,
+  required OfferFilters filters,
+}) {
+  switch (filters.owner) {
+    case OfferOwner.all:
+      return filterOffers(available, origin, filters);
+    case OfferOwner.mine:
+      return filterOffers(mine, null, filters);
+    case OfferOwner.others:
+      final mineIds = {for (final offer in mine) offer['id']}..remove(null);
+      return filterOffers(
+        available.where((offer) => !mineIds.contains(offer['id'])).toList(),
+        origin,
+        filters,
+      );
   }
 }
 
@@ -272,11 +309,18 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
   Widget build(BuildContext context) {
     final origin = ref.watch(originProvider).place;
     final categories = ref.watch(categoriesProvider);
-    final offers = filterOffers(
-      ref.watch(availableOffersProvider),
-      origin,
-      _filters,
+    final loggedIn = ref.watch(authTokenProvider) != null;
+    final mine = <Json>[
+      if (loggedIn) ...ref.watch(myOffersProvider),
+      ...?ref.watch(guestOffersProvider).value,
+    ];
+    final offers = filterOffersByOwner(
+      available: ref.watch(availableOffersProvider),
+      mine: mine,
+      origin: origin,
+      filters: _filters,
     );
+    final showMine = _filters.owner == OfferOwner.mine;
     final syncing = ref.watch(syncControllerProvider).syncing;
 
     return RefreshIndicator(
@@ -338,7 +382,37 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
               ),
             ),
           ),
-          if (origin != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+              child: SegmentedButton<OfferOwner>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(
+                    value: OfferOwner.all,
+                    label: Text('Toutes'),
+                    icon: Icon(Icons.storefront_outlined),
+                  ),
+                  ButtonSegment(
+                    value: OfferOwner.mine,
+                    label: Text('Mes offres'),
+                    icon: Icon(Icons.person_outline),
+                  ),
+                  ButtonSegment(
+                    value: OfferOwner.others,
+                    label: Text('Des autres'),
+                    icon: Icon(Icons.groups_outlined),
+                  ),
+                ],
+                selected: {_filters.owner},
+                onSelectionChanged: (selection) => setState(
+                  () => _filters = _filters.copyWith(owner: selection.first),
+                ),
+              ),
+            ),
+          ),
+          // Mes offres : toutes affichées, quel que soit le rayon.
+          if (origin != null && !showMine)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -381,7 +455,9 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
               child: Text(
-                origin == null
+                showMine
+                    ? 'Mes offres (${offers.length})'
+                    : origin == null
                     ? 'Offres disponibles (${offers.length})'
                     : 'Offres à proximité (${offers.length})',
                 style: const TextStyle(
@@ -396,6 +472,14 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
               hasScrollBody: false,
               child: syncing
                   ? const Center(child: CircularProgressIndicator())
+                  : showMine
+                  ? const EmptyState(
+                      icon: Icons.inventory_2_outlined,
+                      title: 'Aucune offre publiée',
+                      message:
+                          'Vos offres apparaîtront ici, y compris celles '
+                          'terminées ou retirées.',
+                    )
                   : EmptyState(
                       icon: Icons.search_off,
                       title: 'Aucune offre trouvée',
@@ -411,11 +495,17 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
               sliver: SliverList.separated(
                 itemCount: offers.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (context, index) => OfferCard(
-                  offer: offers[index],
-                  onTap: () =>
-                      context.push(AppRoutes.offer('${offers[index]['id']}')),
-                ),
+                itemBuilder: (context, index) {
+                  final offer = offers[index];
+                  return OfferCard(
+                    offer: offer,
+                    showStatus: showMine,
+                    // Offre pas encore envoyée (hors ligne) : sans id serveur.
+                    onTap: () => offer['id'] == null || offer['local'] == true
+                        ? context.push(AppRoutes.myOffers)
+                        : context.push(AppRoutes.offer('${offer['id']}')),
+                  );
+                },
               ),
             ),
         ],

@@ -79,12 +79,51 @@ const realGateway = {
   async markEmailVerified(uid) {
     await firebaseAuth().updateUser(uid, { emailVerified: true });
   },
+
+  async setPassword(uid, password) {
+    await firebaseAuth().updateUser(uid, { password });
+  },
+
+  async createUser({ email, password, displayName }) {
+    const user = await firebaseAuth().createUser({
+      email,
+      password,
+      displayName,
+      emailVerified: true,
+    });
+    return user.uid;
+  },
 };
 
 let gateway = realGateway;
 
 export const firebase = {
   verifyIdToken: (idToken) => gateway.verifyIdToken(idToken),
+
+  /** Nouveau mot de passe : bloquant, sinon l'utilisateur ne pourrait pas se connecter. */
+  async setPassword(uid, password) {
+    try {
+      await gateway.setPassword(uid, password);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      console.error('Firebase : mot de passe non modifié :', error.message);
+      throw new HttpError(503, 'Firebase momentanément indisponible : réessayez plus tard');
+    }
+  },
+
+  /**
+   * Compte créé par l'administrateur, aussi dans Firebase si possible.
+   * Non bloquant : sans Firebase, le compte reste local (mot de passe haché
+   * dans MySQL, connexion par /auth/login). Renvoie l'uid, ou null.
+   */
+  async createAccount(account) {
+    try {
+      return (await gateway.createUser?.(account)) ?? null;
+    } catch (error) {
+      console.error('Firebase : compte non créé :', error.message);
+      return null;
+    }
+  },
 
   /**
    * Répercute un changement sur Firebase sans bloquer : MySQL reste la

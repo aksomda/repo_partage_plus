@@ -100,6 +100,10 @@ async function purgeIdempotencyKeys(conn) {
   await conn.query(
     'DELETE FROM idempotency_keys WHERE created_at < NOW() - INTERVAL 7 DAY',
   );
+  // Au-delà de la plus longue période réglable (30 jours), inutile au quota.
+  await conn.query(
+    'DELETE FROM guest_submissions WHERE created_at < NOW() - INTERVAL 31 DAY',
+  );
 }
 
 /** Exécute toutes les tâches ; sans effet si rien n'est à traiter. */

@@ -19,8 +19,8 @@ Vérifier : <http://localhost:3000/health> doit répondre `{"status":"ok"}`.
 
 | Script | Rôle |
 |---|---|
-| `npm run dev` | Serveur avec rechargement automatique |
-| `npm start` | Serveur sans rechargement |
+| `npm run dev` | Met à jour les tables, puis serveur avec rechargement automatique |
+| `npm start` | Met à jour les tables, puis serveur sans rechargement |
 | `npm run db:migrate` | Crée/actualise les tables (sans perte de données) |
 | `npm run db:seed` | Ajoute les données de démo si la base est vide |
 | `npm run db:seed -- --fresh` | **Efface toutes les données** puis recrée la démo |
@@ -65,9 +65,10 @@ et `payment_info` (ex. « Orange Money 70 00 00 00 »). L'acheteur paie puis
 saisit la référence de la transaction (`reservations.payment_reference`) ;
 le publieur la voit dans les réservations reçues avant de confirmer.
 
-**Offre publiée par un invité** : personne ne peut la confirmer dans l'app,
-les réservations sont confirmées d'office et le retrait se convient par
-téléphone (`contact_phone`). Tous les acteurs connectés (sauf admin) publient.
+**Offre publiée par un invité** : elle ne se réserve pas (`POST /api/reservations`
+répond 409, `details.code = guest_offer_call`) ; on appelle le donateur au
+`contact_phone` pour convenir du retrait. Les offres publiées par un compte se
+réservent avec ou sans compte. Tous les acteurs connectés (sauf admin) publient.
 
 ## Comptes de démo
 

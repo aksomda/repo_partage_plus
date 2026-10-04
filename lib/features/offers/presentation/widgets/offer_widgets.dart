@@ -167,10 +167,18 @@ class OfferThumbnail extends StatelessWidget {
 
 /// Carte d'offre des listes (accueil, recherche, carte).
 class OfferCard extends StatelessWidget {
-  const OfferCard({super.key, required this.offer, required this.onTap});
+  const OfferCard({
+    super.key,
+    required this.offer,
+    required this.onTap,
+    this.showStatus = false,
+  });
 
   final Json offer;
   final VoidCallback onTap;
+
+  /// Affiche le statut (en attente, publiée…) : liste « Mes offres ».
+  final bool showStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -201,6 +209,10 @@ class OfferCard extends StatelessWidget {
                         fontSize: 15,
                       ),
                     ),
+                    if (showStatus) ...[
+                      const SizedBox(height: 4),
+                      StatusBadge(offer['status'] as String? ?? 'pending'),
+                    ],
                     const SizedBox(height: 2),
                     Text(
                       offer['donor_name'] as String? ?? '',

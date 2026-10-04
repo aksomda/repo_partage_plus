@@ -36,6 +36,8 @@ const OFFER_COLUMNS = {
   price: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER weight_kg',
   payment_info: 'VARCHAR(255) NULL AFTER price',
   photo_updated_at: 'DATETIME NULL AFTER longitude',
+  country_code: 'CHAR(2) NULL AFTER payment_info',
+  country_name: 'VARCHAR(80) NULL AFTER country_code',
 };
 
 const RESERVATION_COLUMNS = {
@@ -71,7 +73,16 @@ async function upgrade(conn) {
   for (const table of ['associations', 'categories', 'notifications']) {
     await addMissingColumns(conn, table, { updated_at: UPDATED_AT });
   }
+  await addMissingColumns(conn, 'email_otps', {
+    purpose: "ENUM('activation', 'password_reset') NOT NULL DEFAULT 'activation' AFTER user_id",
+  });
   await conn.query('ALTER TABLE offers MODIFY donor_id INT UNSIGNED NULL');
+  await conn.query('ALTER TABLE offers MODIFY weight_kg DECIMAL(8, 2) NULL');
+  // Publication immédiate : plus de validation préalable, l'admin retire après coup.
+  await conn.query(`ALTER TABLE offers MODIFY status
+    ENUM('pending', 'published', 'rejected', 'reserved', 'completed', 'expired', 'cancelled')
+    NOT NULL DEFAULT 'published'`);
+  await conn.query("UPDATE offers SET status = 'published' WHERE status = 'pending'");
   await conn.query('ALTER TABLE reservations MODIFY beneficiary_id INT UNSIGNED NULL');
 
   await conn.query(`ALTER TABLE users

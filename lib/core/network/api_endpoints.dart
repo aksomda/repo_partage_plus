@@ -12,6 +12,8 @@ abstract final class ApiEndpoints {
   static const firebaseSession = '/auth/firebase';
   static const verifyEmail = '/auth/verify-email';
   static const resendCode = '/auth/resend-code';
+  static const forgotPassword = '/auth/password/forgot';
+  static const resetPassword = '/auth/password/reset';
   static const me = '/auth/me';
   static const updateMe = '/users/me';
   static const changePassword = '/users/me/password';
@@ -44,6 +46,12 @@ abstract final class ApiEndpoints {
   static const readAllNotifications = '/notifications/read-all';
   static String readNotification(int id) => '/notifications/$id/read';
 
+  // Mini chat avec l'administration
+  static const messages = '/messages';
+  static const readMessages = '/messages/read';
+  static String messagePhoto(int id, int position) =>
+      '/messages/$id/photos/$position';
+
   // Impact et recommandations
   static const myImpact = '/impact/me';
   static const myImpactDashboard = '/impact/me/dashboard';
@@ -69,5 +77,6 @@ abstract final class ApiEndpoints {
   static String adminActor(int id) => '/admin/actors/$id';
   static const adminFactors = '/admin/factors';
   static String adminFactor(int id) => '/admin/factors/$id';
+  static const adminSettings = '/admin/settings';
   static const runJobs = '/admin/jobs/run';
 }

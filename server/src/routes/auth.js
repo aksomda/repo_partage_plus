@@ -8,11 +8,11 @@ import { HttpError } from '../http/errors.js';
 import { id, latitude, longitude } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
 import { firestoreMirror } from '../services/firestore_mirror.js';
-import { consumeActivationCode, issueActivationCode } from '../services/otp.js';
+import { consumeActivationCode, consumeCode, issueActivationCode, issueCode } from '../services/otp.js';
 
 export const authRouter = Router();
 
-const email = z.string().trim().toLowerCase().email().max(190);
+export const email = z.string().trim().toLowerCase().email().max(190);
 const idToken = z.string().min(20).max(5000);
 
 /**
@@ -22,7 +22,7 @@ const idToken = z.string().min(20).max(5000);
  * - compte local (Firebase indisponible, ex. Windows/Linux sans Firebase) :
  *   email + mot de passe envoyés à l'API, mot de passe haché dans MySQL.
  */
-const password = z
+export const password = z
   .string()
   .min(8, '8 caractères minimum')
   .max(100)
@@ -60,6 +60,7 @@ const registerModeSchema = registerSchema.refine(
 
 const verifySchema = z.object({ email, code: z.string().trim().regex(/^\d{6}$/, 'Code à 6 chiffres') });
 const loginSchema = z.object({ email, password: z.string().min(1) });
+const resetSchema = verifySchema.extend({ password });
 
 export function publicUser(row) {
   const { password_hash: _passwordHash, ...user } = row;
@@ -215,6 +216,48 @@ authRouter.post('/resend-code', async (req, res) => {
   const [row] = await query('SELECT * FROM users WHERE email = ?', [data.email]);
   if (row?.status === 'pending') {
     await transaction((conn) => issueActivationCode(conn, row));
+  }
+  res.status(204).end();
+});
+
+/** Mot de passe oublié : code à 6 chiffres par e-mail ; 204 même si l'e-mail est inconnu. */
+authRouter.post('/password/forgot', async (req, res) => {
+  const data = z.object({ email }).parse(req.body);
+  const [row] = await query('SELECT * FROM users WHERE email = ?', [data.email]);
+  if (row && row.status !== 'suspended') {
+    await transaction((conn) => issueCode(conn, row, 'password_reset'));
+  }
+  res.status(204).end();
+});
+
+/**
+ * Nouveau mot de passe avec le code reçu : changé dans Firebase (et dans
+ * MySQL pour un compte local). Le code prouve l'e-mail : un compte pas
+ * encore activé l'est du même coup.
+ */
+authRouter.post('/password/reset', async (req, res) => {
+  const data = resetSchema.parse(req.body);
+  const [row] = await query('SELECT * FROM users WHERE email = ?', [data.email]);
+  if (!row) throw new HttpError(400, 'Code incorrect');
+  if (row.status === 'suspended') {
+    throw new HttpError(403, 'Compte désactivé par l’administrateur', { code: 'account_suspended' });
+  }
+
+  // Hors transaction : un essai raté doit rester compté.
+  await consumeCode(pool, row.id, data.code, 'password_reset');
+  if (row.firebase_uid) await firebase.setPassword(row.firebase_uid, data.password);
+  if (row.password_hash || !row.firebase_uid) {
+    await query('UPDATE users SET password_hash = ? WHERE id = ?', [
+      await bcrypt.hash(data.password, 10),
+      row.id,
+    ]);
+  }
+  if (row.status === 'pending') {
+    await query(
+      "UPDATE users SET status = 'active', email_verified_at = NOW() WHERE id = ? AND status = 'pending'",
+      [row.id],
+    );
+    await firebase.syncEmailVerified(row.firebase_uid);
   }
   res.status(204).end();
 });

@@ -7,10 +7,15 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_impact_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_manage_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_reservations_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/association_validation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/categories_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/factors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/offer_moderation_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/settings_screen.dart';
+import 'package:repo_partage_plus/features/auth/presentation/forgot_password_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/login_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/profile_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/register_screen.dart';
@@ -21,6 +26,7 @@ import 'package:repo_partage_plus/features/discovery/presentation/location_picke
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
 import 'package:repo_partage_plus/features/impact/presentation/impact_screen.dart';
+import 'package:repo_partage_plus/features/notifications/presentation/conversation_screen.dart';
 import 'package:repo_partage_plus/features/notifications/presentation/notifications_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/create_offer_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/my_offers_screen.dart';
@@ -67,6 +73,12 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.verifyEmail,
         builder: (context, state) => VerifyEmailScreen(
+          initialEmail: state.uri.queryParameters['email'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.forgotPassword,
+        builder: (context, state) => ForgotPasswordScreen(
           initialEmail: state.uri.queryParameters['email'] ?? '',
         ),
       ),
@@ -136,6 +148,12 @@ GoRouter createRouter({
         builder: (context, state) => const NotificationsScreen(),
       ),
       GoRoute(
+        path: AppRoutes.conversationPattern,
+        builder: (context, state) => ConversationScreen(
+          userId: int.parse(state.pathParameters['userId']!),
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.impact,
         builder: (context, state) => const ImpactScreen(),
       ),
@@ -172,6 +190,22 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.adminActors,
         builder: (context, state) => const ActorsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminSettings,
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminReservations,
+        builder: (context, state) => const AdminReservationsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminImpact,
+        builder: (context, state) => const AdminImpactScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminManage,
+        builder: (context, state) => const AdminManageScreen(),
       ),
     ],
   );

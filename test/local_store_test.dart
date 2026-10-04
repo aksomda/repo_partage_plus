@@ -24,6 +24,33 @@ void main() {
     },
   );
 
+  test('patchSnapshot : remplace des champs sans toucher aux autres', () async {
+    final store = await memoryStore();
+    await store.saveSnapshot({
+      'admin': {
+        'settings': {'a': 1},
+        'users': [1],
+      },
+    });
+    final syncedAt = await store.lastSync();
+
+    await store.patchSnapshot('admin', {
+      'users': [2, 3],
+      'users_source': 'firestore',
+    });
+
+    expect(await store.readSnapshot('admin'), {
+      'settings': {'a': 1},
+      'users': [2, 3],
+      'users_source': 'firestore',
+    });
+    expect(await store.lastSync(), syncedAt);
+
+    // Jamais synchronisé : la clé est créée.
+    await store.patchSnapshot('autre', {'x': 1});
+    expect(await store.readSnapshot('autre'), {'x': 1});
+  });
+
   test('réglage à null : effacé', () async {
     final store = await memoryStore();
     await store.saveSetting('radius', 5);

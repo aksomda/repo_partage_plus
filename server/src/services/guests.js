@@ -2,7 +2,9 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
+import { query } from '../db/pool.js';
 import { HttpError } from '../http/errors.js';
+import { loadSettings } from './settings.js';
 
 /** Identité saisie par un invité (publication ou réservation sans compte). */
 export const guestSchema = z.object({
@@ -47,24 +49,61 @@ export async function hasGuestAccess(db, kind, targetId, token) {
   return timingSafeEqual(Buffer.from(row.token_hash, 'hex'), Buffer.from(hash(token), 'hex'));
 }
 
+const QUOTA_WORDING = {
+  offer: { setting: 'guest_offer', noun: 'publication', action: 'publier' },
+  reservation: { setting: 'guest_reservation', noun: 'réservation', action: 'réserver' },
+};
+
+/** Numéro réduit aux chiffres (et +), pour compter un même numéro ensemble. */
+const normalizePhone = (phone) => phone.replace(/[^0-9+]/g, '');
+
+function formatWindow(hours) {
+  if (hours % 24 !== 0) return hours === 1 ? 'heure' : `${hours} heures`;
+  const days = hours / 24;
+  if (days === 1) return 'jour';
+  if (days === 7) return 'semaine';
+  return `${days} jours`;
+}
+
 /**
- * Limite le nombre de publications / réservations sans compte par adresse IP,
- * pour freiner le spam (compteur en mémoire, remis à zéro au redémarrage).
+ * Quota d'actions sans compte réglé par l'administrateur : compté sur la
+ * période, par numéro de téléphone et par adresse IP (le premier atteint bloque).
  */
-export function guestRateLimit({ max, windowMinutes = 60 }) {
-  const hits = new Map();
-  return (req, res, next) => {
-    if (req.user) return next();
-    const now = Date.now();
-    const since = now - windowMinutes * 60_000;
-    const recent = (hits.get(req.ip) ?? []).filter((time) => time > since);
-    if (recent.length >= max) {
-      throw new HttpError(429, 'Trop de demandes sans compte : réessayez plus tard ou connectez-vous');
-    }
-    recent.push(now);
-    hits.set(req.ip, recent);
-    next();
-  };
+export async function assertGuestQuota(kind, phone, ip) {
+  const { setting, noun, action } = QUOTA_WORDING[kind];
+  const settings = await loadSettings();
+  const max = settings[`${setting}_max`];
+  const hours = settings[`${setting}_window_hours`];
+
+  if (max === 0) {
+    throw new HttpError(403, `Impossible de ${action} sans compte : créez un compte`, {
+      code: 'guest_disabled',
+    });
+  }
+
+  const [{ count }] = await query(
+    `SELECT COUNT(*) AS count FROM guest_submissions
+     WHERE kind = ? AND created_at > NOW() - INTERVAL ? HOUR AND (phone = ? OR ip = ?)`,
+    [kind, hours, normalizePhone(phone), ip ?? ''],
+  );
+  if (count >= max) {
+    const plural = max > 1 ? 's' : '';
+    throw new HttpError(
+      429,
+      `Limite de ${max} ${noun}${plural} sans compte par ${formatWindow(hours)} atteinte : ` +
+        `créez un compte pour ${action} davantage`,
+      { code: 'guest_limit', max, window_hours: hours },
+    );
+  }
+}
+
+/** Compte l'action dans le quota (dans la transaction qui l'enregistre). */
+export async function recordGuestSubmission(conn, kind, phone, ip) {
+  await conn.query('INSERT INTO guest_submissions (kind, phone, ip) VALUES (?, ?, ?)', [
+    kind,
+    normalizePhone(phone),
+    ip ?? null,
+  ]);
 }
 
 /** Prénom Nom affiché pour un invité. */

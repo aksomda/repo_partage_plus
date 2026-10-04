@@ -12,6 +12,7 @@ import { aiRouter } from './routes/ai.js';
 import { authRouter } from './routes/auth.js';
 import { catalogRouter } from './routes/catalog.js';
 import { impactRouter } from './routes/impact.js';
+import { messagesRouter } from './routes/messages.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { offersRouter } from './routes/offers.js';
 import { recommendationsRouter } from './routes/recommendations.js';
@@ -25,8 +26,13 @@ export const app = express();
 
 app.set('trust proxy', 1);
 app.use(cors({ origin: config.corsOrigins }));
-// Marge pour la photo d'une offre (2 Mo, encodée en base64).
-app.use(express.json({ limit: '4mb' }));
+// Marge pour la photo d'une offre (3 Mo, encodée en base64 : ~4 Mo) ; un
+// message du mini chat peut joindre jusqu'à 3 images.
+const jsonDefault = express.json({ limit: '5mb' });
+const jsonMessages = express.json({ limit: '15mb' });
+app.use((req, res, next) =>
+  (req.path.startsWith('/api/messages') ? jsonMessages : jsonDefault)(req, res, next),
+);
 
 // Utilisé par Render (health check) et pour réveiller le serveur avant la démo.
 app.get('/health', async (req, res) => {
@@ -45,6 +51,7 @@ api.use('/users', usersRouter);
 api.use('/offers', offersRouter);
 api.use('/reservations', reservationsRouter);
 api.use('/notifications', notificationsRouter);
+api.use('/messages', messagesRouter);
 api.use('/impact', impactRouter);
 api.use('/recommendations', aiRouter);
 api.use('/recommendations', recommendationsRouter);

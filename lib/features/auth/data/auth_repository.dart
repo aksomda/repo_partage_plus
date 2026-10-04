@@ -71,7 +71,7 @@ class AccountPendingException implements Exception {
   String toString() => 'Compte non activé : saisissez le code reçu par e-mail';
 }
 
-/// L'adresse e-mail a déjà un compte : un lien de réinitialisation du mot
+/// L'adresse e-mail a déjà un compte : un code de réinitialisation du mot
 /// de passe a été envoyé ([resetSent]) et l'utilisateur doit se connecter.
 class AccountExistsException implements Exception {
   const AccountExistsException(this.email, {required this.resetSent});
@@ -81,8 +81,8 @@ class AccountExistsException implements Exception {
 
   @override
   String toString() => resetSent
-      ? 'Un compte existe déjà avec $email : un lien de réinitialisation '
-            'du mot de passe vous a été envoyé'
+      ? 'Un compte existe déjà avec $email : un code pour réinitialiser '
+            'le mot de passe vous a été envoyé'
       : 'Un compte existe déjà avec $email : connectez-vous';
 }
 
@@ -117,11 +117,11 @@ class AuthRepository {
 
   Future<AccountExistsException> _accountExists(String email) async {
     try {
-      await sendPasswordReset(email);
+      await requestPasswordReset(email);
       return AccountExistsException(email, resetSent: true);
     } catch (_) {
-      // Firebase absent ou injoignable : l'utilisateur peut toujours
-      // utiliser « Mot de passe oublié » depuis la connexion.
+      // Serveur injoignable, ou code demandé il y a moins d'une minute :
+      // l'utilisateur peut toujours utiliser « Mot de passe oublié ».
       return AccountExistsException(email, resetSent: false);
     }
   }
@@ -232,8 +232,21 @@ class AuthRepository {
     await _saveSession(data);
   }
 
-  Future<void> sendPasswordReset(String email) =>
-      _firebase.sendPasswordReset(email);
+  /// Envoie un code à 6 chiffres par e-mail (sans erreur si l'adresse est
+  /// inconnue : on ne révèle pas quels comptes existent).
+  Future<void> requestPasswordReset(String email) =>
+      _post(ApiEndpoints.forgotPassword, {'email': email});
+
+  /// Nouveau mot de passe avec le code reçu, sans aide d'un administrateur.
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+  }) => _post(ApiEndpoints.resetPassword, {
+    'email': email,
+    'code': code,
+    'password': password,
+  });
 
   Future<Map<String, dynamic>> _post(
     String path,
@@ -246,7 +259,7 @@ class AuthRepository {
       return response.data ?? const {};
     } on DioException catch (error) {
       if (error.response == null) {
-        throw ApiException('Connexion Internet requise');
+        throw ApiException.unreachable();
       }
       throw ApiException.fromDio(error);
     }

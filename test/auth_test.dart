@@ -133,9 +133,13 @@ void main() {
     });
 
     test(
-      'compte existant : lien de réinitialisation envoyé, sans suppression',
+      'compte existant : code de réinitialisation envoyé, sans suppression',
       () async {
         firebase.accounts['awa@test.local'] = 'autre-motdepasse1';
+        server.handler = (request) async =>
+            request.path == '/auth/password/forgot'
+            ? jsonResponse(200, {})
+            : jsonResponse(404, {'error': 'Route inconnue'});
 
         await expectLater(
           repository().register(registration),
@@ -145,7 +149,7 @@ void main() {
                 .having((e) => e.resetSent, 'resetSent', isTrue),
           ),
         );
-        expect(firebase.calls, contains('reset'));
+        expect(bodyOf('/auth/password/forgot'), {'email': 'awa@test.local'});
         expect(firebase.calls, isNot(contains('delete')));
         expect(firebase.accounts, contains('awa@test.local'));
       },
@@ -155,16 +159,25 @@ void main() {
       'profil déjà enregistré (409 email_taken) : réinitialisation',
       () async {
         firebase.accounts['awa@test.local'] = 'motdepasse1';
-        server.handler = (request) async => jsonResponse(409, {
-          'error': 'Un compte existe déjà',
-          'details': {'code': 'email_taken'},
-        });
+        server.handler = (request) async =>
+            request.path == '/auth/password/forgot'
+            ? jsonResponse(200, {})
+            : jsonResponse(409, {
+                'error': 'Un compte existe déjà',
+                'details': {'code': 'email_taken'},
+              });
 
         await expectLater(
           repository().register(registration),
-          throwsA(isA<AccountExistsException>()),
+          throwsA(
+            isA<AccountExistsException>().having(
+              (e) => e.resetSent,
+              'resetSent',
+              isTrue,
+            ),
+          ),
         );
-        expect(firebase.calls, contains('reset'));
+        expect(bodyOf('/auth/password/forgot'), {'email': 'awa@test.local'});
         expect(firebase.accounts, contains('awa@test.local'));
       },
     );

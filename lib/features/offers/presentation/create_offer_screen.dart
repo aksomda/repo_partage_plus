@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/countries/country_widgets.dart';
 import 'package:repo_partage_plus/core/guest/guest_fields.dart';
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/location/location.dart';
@@ -20,8 +22,8 @@ import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widget
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
-/// Publication d'une offre, avec ou sans compte. L'offre est visible
-/// après validation par un modérateur.
+/// Publication d'une offre, avec ou sans compte. L'offre est visible tout
+/// de suite ; l'administrateur peut la retirer après coup en cas d'abus.
 class CreateOfferScreen extends ConsumerStatefulWidget {
   const CreateOfferScreen({super.key});
 
@@ -38,7 +40,8 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
   final _unit = TextEditingController(text: 'portion');
   final _weight = TextEditingController();
   final _price = TextEditingController(text: '0');
-  final _paymentInfo = TextEditingController();
+  final _paymentInfo = PaymentInfoController();
+  final _contactEmail = TextEditingController();
   final _address = TextEditingController();
 
   int? _categoryId;
@@ -51,6 +54,11 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
   var _free = true;
   var _loading = false;
 
+  /// Adresse remplie automatiquement : remplacée si le lieu change, tant que
+  /// l'utilisateur ne l'a pas modifiée.
+  String? _autoAddress;
+  var _resolvingAddress = false;
+
   @override
   void initState() {
     super.initState();
@@ -59,12 +67,51 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     _pickupStart = DateTime(now.year, now.month, now.day, now.hour + 1);
     _pickupEnd = _pickupStart.add(const Duration(hours: 4));
     _place = ref.read(originProvider).place;
-    if (_place != null && !_place!.isCurrent) _address.text = _place!.label;
+    if (_place != null && !_place!.isCurrent) _setAutoAddress(_place!.label);
+    unawaited(_locate());
+  }
+
+  /// Position GPS exacte au moment de publier (la position mémorisée peut
+  /// dater), puis adresse lisible : rue, quartier, ville.
+  Future<void> _locate() async {
+    if (_place != null && !_place!.isCurrent) return;
+    try {
+      final place = await ref.read(locationGatewayProvider).currentPosition();
+      if (!mounted) return;
+      // Un point choisi entre-temps sur la carte reste prioritaire.
+      if (_place != null && !_place!.isCurrent) return;
+      setState(() => _place = place);
+    } catch (_) {
+      // Refus ou GPS indisponible : position mémorisée ou choix sur la carte.
+    }
+    final place = _place;
+    if (mounted && place != null && place.isCurrent) await _fillAddress(place);
+  }
+
+  bool get _addressEditedByUser =>
+      _address.text.trim().isNotEmpty && _address.text != _autoAddress;
+
+  void _setAutoAddress(String text) {
+    _address.text = text;
+    _autoAddress = text;
+  }
+
+  /// Nom du lieu (OpenStreetMap) ; jamais à la place d'une saisie manuelle.
+  /// Hors ligne, le champ reste vide et la saisie manuelle suffit.
+  Future<void> _fillAddress(Place place) async {
+    if (_addressEditedByUser) return;
+    setState(() => _resolvingAddress = true);
+    final name = await ref.read(geocoderProvider).nameOf(place.lat, place.lng);
+    if (!mounted) return;
+    setState(() => _resolvingAddress = false);
+    if (name == null || _place != place || _addressEditedByUser) return;
+    _setAutoAddress(name);
   }
 
   @override
   void dispose() {
     _guest.dispose();
+    _paymentInfo.dispose();
     for (final controller in [
       _title,
       _description,
@@ -72,7 +119,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
       _unit,
       _weight,
       _price,
-      _paymentInfo,
+      _contactEmail,
       _address,
     ]) {
       controller.dispose();
@@ -84,8 +131,12 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     final place = await context.push<Place>(AppRoutes.pickLocation);
     if (place == null) return;
     setState(() => _place = place);
-    if (!place.isCurrent || _address.text.isEmpty) {
-      _address.text = place.isCurrent ? '' : place.label;
+    if (_addressEditedByUser) return;
+    if (place.isCurrent) {
+      _setAutoAddress('');
+      await _fillAddress(place);
+    } else {
+      _setAutoAddress(place.label);
     }
   }
 
@@ -148,7 +199,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
       return;
     }
     if (bytes.length > _maxPhotoBytes) {
-      showMessage(context, 'Photo trop lourde (2 Mo maximum)', error: true);
+      showMessage(context, 'Photo trop lourde (3 Mo maximum)', error: true);
       return;
     }
     setState(() {
@@ -157,7 +208,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     });
   }
 
-  static const _maxPhotoBytes = 2 * 1024 * 1024;
+  static const _maxPhotoBytes = 3 * 1024 * 1024;
 
   /// Type d'image d'après ses premiers octets (comme le serveur).
   static String? _imageType(Uint8List bytes) {
@@ -230,6 +281,10 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     }
 
     final price = _free ? 0 : num.parse(_price.text.trim());
+    final weight = num.tryParse(_weight.text.trim().replaceAll(',', '.'));
+    final email = _contactEmail.text.trim().toLowerCase();
+    // Pays du publieur, d'après sa position (s'il est déjà connu).
+    final country = ref.read(detectedCountryProvider).value;
     final offer = <String, Object?>{
       'category_id': _categoryId,
       'title': _title.text.trim(),
@@ -237,9 +292,14 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
         'description': _description.text.trim(),
       'quantity': int.parse(_quantity.text.trim()),
       'unit': _unit.text.trim(),
-      'weight_kg': num.parse(_weight.text.trim().replaceAll(',', '.')),
+      'weight_kg': ?weight,
       'price': price,
-      if (price > 0) 'payment_info': _paymentInfo.text.trim(),
+      if (price > 0) 'payment_info': _paymentInfo.paymentInfo,
+      if (email.isNotEmpty) 'contact_email': email,
+      if (country != null) ...{
+        'country_code': country.code,
+        'country_name': country.name,
+      },
       'expiry_date': _isoDay,
       'pickup_start': _pickupStart.toUtc().toIso8601String(),
       'pickup_end': _pickupEnd.toUtc().toIso8601String(),
@@ -257,7 +317,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
         if (!mounted) return;
         switch (result) {
           case Sent():
-            showMessage(context, 'Offre envoyée : visible après validation');
+            showMessage(context, 'Offre publiée');
             context.go(AppRoutes.myOffers);
           case Queued():
             showMessage(
@@ -273,7 +333,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
             .read(guestRepositoryProvider)
             .publishOffer(offer, _guest.value);
         if (!mounted) return;
-        showMessage(context, 'Offre envoyée : visible après validation');
+        showMessage(context, 'Offre publiée');
         context.go(AppRoutes.myOffers);
       }
     } catch (error) {
@@ -304,12 +364,15 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     final loggedIn = ref.watch(authTokenProvider) != null;
     final categories = ref.watch(categoriesProvider);
     final syncing = ref.watch(syncControllerProvider.select((s) => s.syncing));
+    // Lance la détection du pays du publieur, envoyé avec l'offre.
+    ref.watch(detectedCountryProvider);
 
     // Position encore en cours de calcul à l'ouverture : utilisée dès
     // qu'elle est connue, si aucun lieu n'a été choisi entre-temps.
     ref.listen(originProvider, (_, next) {
       if (_place == null && next.place != null) {
         setState(() => _place = next.place);
+        unawaited(_fillAddress(next.place!));
       }
     });
 
@@ -354,24 +417,24 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                             ),
                           ),
                         ),
-                        FieldSpan(
-                          span: 2,
-                          child: LabeledField(
-                            label: 'Description (facultatif)',
-                            child: TextFormField(
-                              controller: _description,
-                              minLines: 1,
-                              maxLines: 3,
-                              maxLength: 2000,
-                              decoration: const InputDecoration(
-                                hintText:
-                                    'Contenu, état, conditions de retrait…',
-                                // Limite appliquée sans compteur, pour gagner
-                                // une ligne.
-                                counterText: '',
-                              ),
+                        LabeledField(
+                          label: 'Description (facultatif)',
+                          child: TextFormField(
+                            controller: _description,
+                            minLines: 1,
+                            maxLines: 3,
+                            maxLength: 2000,
+                            decoration: const InputDecoration(
+                              hintText: 'Contenu, état, conditions…',
+                              // Limite appliquée sans compteur, pour gagner
+                              // une ligne.
+                              counterText: '',
                             ),
                           ),
+                        ),
+                        LabeledField(
+                          label: 'Photo (facultatif, 3 Mo max)',
+                          child: _photoField(),
                         ),
                         LabeledField(
                           label: 'Quantité',
@@ -400,8 +463,7 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                           ),
                         ),
                         LabeledField(
-                          label: 'Poids total (kg)',
-                          required: true,
+                          label: 'Poids total (kg) (facultatif)',
                           child: TextFormField(
                             controller: _weight,
                             keyboardType: const TextInputType.numberWithOptions(
@@ -413,11 +475,13 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                                   'Sert à calculer l’impact (gaspillage évité)',
                             ),
                             validator: (value) {
+                              final text = (value ?? '').trim();
+                              if (text.isEmpty) return null;
                               final weight = num.tryParse(
-                                (value ?? '').trim().replaceAll(',', '.'),
+                                text.replaceAll(',', '.'),
                               );
                               return weight == null || weight <= 0
-                                  ? 'Poids obligatoire'
+                                  ? 'Poids invalide'
                                   : null;
                             },
                           ),
@@ -479,45 +543,36 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                                   : null,
                             ),
                           ),
-                          LabeledField(
-                            label: 'Comment payer ?',
-                            required: true,
-                            child: TextFormField(
-                              controller: _paymentInfo,
-                              decoration: const InputDecoration(
-                                hintText: 'Ex. : Orange Money +226 70 00 00 00',
-                                helperText:
+                          FieldSpan(
+                            span: 3,
+                            child: LabeledField(
+                              label: 'Comment payer ?',
+                              required: true,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  PaymentInfoField(controller: _paymentInfo),
+                                  const SizedBox(height: 4),
+                                  const Text(
                                     'Le paiement se fait hors application ; '
                                     'l’acheteur saisit la référence de sa '
                                     'transaction.',
-                                helperMaxLines: 3,
-                              ),
-                              validator: requiredField(
-                                'Moyen de paiement obligatoire',
+                                    style: TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
                         ],
-                        FieldSpan(
-                          span: 2,
-                          child: LabeledField(
-                            label: 'Lieu de retrait',
-                            required: true,
-                            child: _pickupPlace(),
-                          ),
-                        ),
-                        FieldSpan(
-                          span: 2,
-                          child: LabeledField(
-                            label: 'Photo (facultatif)',
-                            child: _photoField(),
-                          ),
-                        ),
                         if (!loggedIn)
                           FieldSpan.full(
                             child: GuestFields(
                               controller: _guest,
                               returnTo: AppRoutes.createOffer,
+                              extraField: _emailField(),
                               notice:
                                   'Publiez sans compte : votre nom et votre '
                                   'téléphone seront visibles des personnes '
@@ -525,6 +580,17 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                                   'depuis cet appareil.',
                             ),
                           ),
+                        if (loggedIn) _emailField(),
+                        FieldSpan(
+                          // Seul sur sa rangée sans compte (l'e-mail suit le
+                          // téléphone), à côté de l'e-mail sinon.
+                          span: loggedIn ? 3 : 4,
+                          child: LabeledField(
+                            label: 'Lieu de retrait',
+                            required: true,
+                            child: _pickupPlace(),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
@@ -688,8 +754,30 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     );
   }
 
-  /// Point sur la carte et adresse lisible côte à côte (empilés sur
-  /// écran étroit), coordonnées en dessous.
+  /// Jamais affichée aux autres usagers : sert à prévenir le publieur.
+  Widget _emailField() => LabeledField(
+    label: 'Adresse e-mail (facultatif)',
+    child: TextFormField(
+      controller: _contactEmail,
+      keyboardType: TextInputType.emailAddress,
+      autofillHints: const [AutofillHints.email],
+      decoration: const InputDecoration(
+        hintText: 'exemple@mail.com',
+        // Jamais affichée aux autres usagers.
+        suffixIcon: Tooltip(
+          message:
+              'Non affichée : sert à vous prévenir si '
+              'l’offre est retirée',
+          child: Icon(Icons.info_outline, size: 18),
+        ),
+      ),
+      validator: (value) =>
+          (value?.trim().isEmpty ?? true) ? null : validateEmail(value),
+    ),
+  );
+
+  /// Point sur la carte, coordonnées et adresse lisible sur une même ligne
+  /// (empilés sur écran étroit).
   Widget _pickupPlace() {
     final mapButton = OutlinedButton.icon(
       onPressed: _pickPlace,
@@ -703,56 +791,84 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     );
     final address = TextFormField(
       controller: _address,
-      decoration: const InputDecoration(
-        hintText: 'Adresse, repère (ex. : face au marché)',
+      decoration: InputDecoration(
+        hintText: _resolvingAddress
+            ? 'Recherche de l’adresse…'
+            : 'Adresse, repère (ex. : face au marché)',
+        suffixIcon: _resolvingAddress
+            ? const Padding(
+                padding: EdgeInsets.all(14),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : null,
       ),
       validator: (value) =>
           (value?.trim().length ?? 0) < 3 ? 'Adresse obligatoire' : null,
     );
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        LayoutBuilder(
-          builder: (context, constraints) => constraints.maxWidth < 400
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [mapButton, const SizedBox(height: 8), address],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: mapButton),
-                    const SizedBox(width: 12),
-                    Expanded(child: address),
-                  ],
-                ),
-        ),
-        if (_place != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.my_location,
-                  size: 16,
+    // Sur écran large, latitude et longitude s'empilent pour laisser la
+    // place au bouton et au champ adresse.
+    Widget? coordinates({required bool stacked}) => _place == null
+        ? null
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.my_location,
+                size: 16,
+                color: AppColors.textMuted,
+              ),
+              const SizedBox(width: 6),
+              SelectableText(
+                'Latitude : ${_place!.lat.toStringAsFixed(6)}'
+                '${stacked ? '\n' : '   '}'
+                'Longitude : ${_place!.lng.toStringAsFixed(6)}',
+                style: const TextStyle(
                   color: AppColors.textMuted,
+                  fontSize: 13,
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: SelectableText(
-                    'Latitude : ${_place!.lat.toStringAsFixed(6)}   '
-                    'Longitude : ${_place!.lng.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 13,
+              ),
+            ],
+          );
+
+    return LayoutBuilder(
+      builder: (context, constraints) => constraints.maxWidth < 640
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                mapButton,
+                if (_place != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: coordinates(stacked: false),
                     ),
                   ),
-                ),
+                const SizedBox(height: 8),
+                address,
+              ],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: mapButton),
+                if (_place != null) ...[
+                  const SizedBox(width: 12),
+                  // Centré verticalement sur la hauteur du bouton (52).
+                  SizedBox(
+                    height: 52,
+                    child: Center(child: coordinates(stacked: true)),
+                  ),
+                ],
+                const SizedBox(width: 12),
+                Expanded(child: address),
               ],
             ),
-          ),
-      ],
     );
   }
 }

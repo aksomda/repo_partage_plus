@@ -9,15 +9,35 @@ function hashCode(userId, code) {
   return createHmac('sha256', config.jwt.secret).update(`${userId}:${code}`).digest('hex');
 }
 
+/** Texte de l'e-mail selon l'usage du code. */
+const PURPOSES = {
+  activation: {
+    subject: 'votre code d’activation',
+    label: 'Votre code d’activation Partage+ est',
+    ignore: 'Si vous n’êtes pas à l’origine de cette inscription, ignorez ce message.',
+  },
+  password_reset: {
+    subject: 'réinitialisation de votre mot de passe',
+    label: 'Votre code pour choisir un nouveau mot de passe Partage+ est',
+    ignore: 'Si vous n’avez rien demandé, ignorez ce message : votre mot de passe reste inchangé.',
+  },
+};
+
+/** Code d'activation du compte, envoyé après l'inscription. */
+export const issueActivationCode = (conn, user) => issueCode(conn, user, 'activation');
+export const consumeActivationCode = (conn, userId, code) =>
+  consumeCode(conn, userId, code, 'activation');
+
 /**
- * Crée un nouveau code d'activation (les précédents deviennent inutilisables)
- * et l'envoie par e-mail.
+ * Crée un nouveau code (les précédents du même usage deviennent
+ * inutilisables) et l'envoie par e-mail.
  */
-export async function issueActivationCode(conn, user) {
+export async function issueCode(conn, user, purpose) {
+  const wording = PURPOSES[purpose];
   const [[last]] = await conn.query(
     `SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age FROM email_otps
-     WHERE user_id = ? ORDER BY id DESC LIMIT 1`,
-    [user.id],
+     WHERE user_id = ? AND purpose = ? ORDER BY id DESC LIMIT 1`,
+    [user.id, purpose],
   );
   if (last && last.age < config.otp.resendDelaySeconds) {
     const wait = config.otp.resendDelaySeconds - last.age;
@@ -26,38 +46,38 @@ export async function issueActivationCode(conn, user) {
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
   await conn.query(
-    'UPDATE email_otps SET consumed_at = NOW() WHERE user_id = ? AND consumed_at IS NULL',
-    [user.id],
+    'UPDATE email_otps SET consumed_at = NOW() WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL',
+    [user.id, purpose],
   );
   await conn.query(
-    `INSERT INTO email_otps (user_id, code_hash, expires_at)
-     VALUES (?, ?, NOW() + INTERVAL ? MINUTE)`,
-    [user.id, hashCode(user.id, code), config.otp.ttlMinutes],
+    `INSERT INTO email_otps (user_id, purpose, code_hash, expires_at)
+     VALUES (?, ?, ?, NOW() + INTERVAL ? MINUTE)`,
+    [user.id, purpose, hashCode(user.id, code), config.otp.ttlMinutes],
   );
 
   await sendMail({
     to: user.email,
-    subject: `Partage+ : votre code d’activation ${code}`,
+    subject: `Partage+ : ${wording.subject} (${code})`,
     text:
       `Bonjour ${user.first_name ?? user.name},\n\n` +
-      `Votre code d’activation Partage+ est : ${code}\n` +
+      `${wording.label} : ${code}\n` +
       `Il est valable ${config.otp.ttlMinutes} minutes.\n\n` +
-      'Si vous n’êtes pas à l’origine de cette inscription, ignorez ce message.',
+      wording.ignore,
     html:
       `<p>Bonjour ${escapeHtml(user.first_name ?? user.name)},</p>` +
-      `<p>Votre code d’activation <b>Partage+</b> est :</p>` +
+      `<p>${wording.label} :</p>` +
       `<p style="font-size:28px;font-weight:bold;letter-spacing:6px;color:#1B7A3A">${code}</p>` +
       `<p>Il est valable ${config.otp.ttlMinutes} minutes.</p>` +
-      '<p style="color:#6B7A70">Si vous n’êtes pas à l’origine de cette inscription, ignorez ce message.</p>',
+      `<p style="color:#6B7A70">${wording.ignore}</p>`,
   });
 }
 
 /** Vérifie le code ; lève une erreur explicite sinon. */
-export async function consumeActivationCode(conn, userId, code) {
+export async function consumeCode(conn, userId, code, purpose) {
   const [[otp]] = await conn.query(
     `SELECT id, code_hash, attempts, expires_at < NOW() AS expired FROM email_otps
-     WHERE user_id = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`,
-    [userId],
+     WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+    [userId, purpose],
   );
   if (!otp || otp.expired) {
     throw new HttpError(400, 'Code expiré : demandez un nouveau code', { code: 'otp_expired' });
