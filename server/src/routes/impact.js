@@ -10,13 +10,14 @@ export const impactRouter = Router();
 /** Poids sauvé par une réservation : part du poids de l'offre réservée. */
 const SAVED_KG = 'o.weight_kg * r.quantity / o.initial_quantity';
 
-/** Mesures communes : retraits, produits, kg, CO2 et repas. */
+/** Mesures communes : retraits, produits, kg, CO2, repas et économies. */
 const MEASURES = `
   COUNT(*) AS pickups,
   COALESCE(SUM(r.quantity), 0) AS items,
   COALESCE(SUM(${SAVED_KG}), 0) AS food_kg,
   COALESCE(SUM(${SAVED_KG} * COALESCE(f.co2_kg_per_kg, 0)), 0) AS co2_kg,
-  COALESCE(SUM(${SAVED_KG} * COALESCE(f.meals_per_kg, 0)), 0) AS meals`;
+  COALESCE(SUM(${SAVED_KG} * COALESCE(f.meals_per_kg, 0)), 0) AS meals,
+  COALESCE(SUM((o.price * r.quantity) - r.amount), 0) AS economies_fcfa`;
 
 const PICKED_UP = `
   FROM reservations r
@@ -41,6 +42,7 @@ export function formatImpact(row) {
     food_kg: round1(row.food_kg),
     co2_kg: round1(row.co2_kg),
     meals: Math.round(Number(row.meals)),
+    economies_fcfa: Math.round(Number(row.economies_fcfa ?? 0)),
   };
 }
 
@@ -60,7 +62,12 @@ export function fillMonths(rows, now = new Date()) {
   return Array.from({ length: MONTHS }, (_, i) => {
     const month = monthKey(monthStart(now, MONTHS - 1 - i));
     const row = byMonth.get(month);
-    return { month, ...formatImpact(row ?? { pickups: 0, food_kg: 0, co2_kg: 0, meals: 0 }) };
+    return {
+      month,
+      ...formatImpact(
+        row ?? { pickups: 0, food_kg: 0, co2_kg: 0, meals: 0, economies_fcfa: 0 },
+      ),
+    };
   });
 }
 

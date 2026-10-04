@@ -99,7 +99,7 @@ class _EmptyState extends StatelessWidget {
         Icon(Icons.eco_outlined, size: 56, color: AppColors.primary),
         SizedBox(height: 16),
         Text(
-          'Pas encore de chiffres d’impact.\n'
+          'Pas encore de chiffres d\u2019impact.\n'
           'Ils apparaîtront après votre premier don ou retrait. '
           'Tirez vers le bas pour actualiser.',
           textAlign: TextAlign.center,
@@ -219,6 +219,11 @@ class _Counters extends StatelessWidget {
           icon: Icons.restaurant_outlined,
           label: 'Repas équivalents',
           value: formatNumber(impact['meals'] as num?),
+        ),
+        _StatCard(
+          icon: Icons.savings_outlined,
+          label: 'Économies réalisées',
+          value: '${formatNumber(impact['economies_fcfa'] as num? ?? 0)} F',
         ),
       ],
     );
