@@ -2,6 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Partage+ utilise le micro pour dicter vos préférences de recommandation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Partage+ transcrit vos préférences dictées pour vous recommander des offres.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Partage+ utilise votre position pour afficher les offres disponibles près de chez vous.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
