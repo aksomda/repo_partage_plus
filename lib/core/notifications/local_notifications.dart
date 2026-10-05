@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/notifications/reminder_planner.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 
 /// Notifications affichées par l'appareil (Android/iOS).
 ///
@@ -87,9 +89,17 @@ class LocalNotifications {
     if (!await _whenReady()) return;
 
     final now = DateTime.now();
+    // Réservations et publications faites sans compte comprises : un
+    // invité reçoit aussi ses rappels de retrait et alertes de DLC.
     final planned = ReminderPlanner.plan(
-      reservations: await _list(store, 'reservations'),
-      myOffers: await _list(store, 'my_offers'),
+      reservations: [
+        ...await _list(store, 'reservations'),
+        ...await _guestItems(store, 'reservations'),
+      ],
+      myOffers: [
+        ...await _list(store, 'my_offers'),
+        ...await _guestItems(store, 'offers'),
+      ],
       now: now,
     );
     final plannedIds = planned.map((p) => p.id).toSet();
@@ -152,6 +162,116 @@ class LocalNotifications {
     }
     await store.saveSetting('last_shown_notification', maxId);
   }
+
+  /// Identifiants des notifications ci-dessous : hors de la plage
+  /// annulée par [reschedule].
+  static const guestStatusBase = 5000000;
+  static const offerAlertBase = 6000000;
+
+  /// Nombre maximal d'alertes « nouvelle offre » affichées une par une.
+  static const maxOfferAlerts = 3;
+
+  /// Offres déjà vues par les alertes (gardées au plus).
+  static const maxSeenOffers = 2000;
+
+  /// Réservation faite sans compte confirmée ou annulée par le donateur :
+  /// l'invité n'a pas de notifications serveur, l'appareil le prévient.
+  Future<void> showGuestReservationChanges(LocalStore store) async {
+    for (final reservation in await store.readGuestItems('reservations')) {
+      final status = reservation['status'];
+      final known = reservation['notified_status'];
+      if (status == known) continue;
+      // Première lecture : rien à signaler, on retient le statut.
+      if (known != null) {
+        final title = reservation['offer_title'];
+        final (heading, body) = switch (status) {
+          'confirmed' => (
+            'Réservation confirmée',
+            '« $title » vous attend. Code de retrait : '
+                '${reservation['pickup_code']}.',
+          ),
+          'cancelled' => (
+            'Réservation annulée',
+            '« $title » : la réservation a été annulée.',
+          ),
+          _ => (null, null),
+        };
+        if (heading != null && body != null) {
+          await show(
+            guestStatusBase + (reservation['id']! as int) % 1000000,
+            heading,
+            body,
+          );
+        }
+      }
+      await store.patchGuestItem('reservations', reservation['id'], {
+        'notified_status': status,
+      });
+    }
+  }
+
+  /// Nouvelles offres qui répondent à une recherche enregistrée (avec ou
+  /// sans compte). À la première synchronisation, tout est déjà « vu ».
+  Future<void> alertNewOffers(LocalStore store) async {
+    final offers = await _list(store, 'offers');
+    final ids = [for (final offer in offers) ?offer['id'] as int?];
+    final previous = (await store.readSetting<List>(
+      'alert_seen_offers',
+    ))?.cast<int>();
+    await store.saveSetting(
+      'alert_seen_offers',
+      {...ids, ...?previous}.take(maxSeenOffers).toList(),
+    );
+    if (previous == null) return;
+
+    final favorites = Favorites.fromMap(await store.readSetting('favorites'));
+    if (favorites.searches.isEmpty) return;
+    final profile = await store.readSnapshot('profile');
+    if (profile is Map) {
+      final preferences = profile['preferences'];
+      if (preferences is Map && preferences['search_alerts'] == false) return;
+    }
+
+    final profileId = profile is Map ? profile['id'] : null;
+    final matches = newOfferMatches(
+      offers: offers,
+      seen: previous.toSet(),
+      searches: favorites.searches,
+      now: DateTime.now(),
+      origin: Place.fromMap(await store.readSetting<Object?>('origin')),
+      ownIds: {
+        for (final offer in offers)
+          if (profileId != null && offer['donor_id'] == profileId)
+            ?offer['id'] as int?,
+        for (final offer in await store.readGuestItems('offers'))
+          ?offer['id'] as int?,
+      },
+    );
+
+    for (final (offer, search) in matches.take(maxOfferAlerts)) {
+      await show(
+        offerAlertBase + (offer['id']! as int) % 1000000,
+        'Nouvelle offre · ${search.name}',
+        '« ${offer['title']} » correspond à votre recherche.',
+      );
+    }
+    if (matches.length > maxOfferAlerts) {
+      await show(
+        offerAlertBase + 999999,
+        'Nouvelles offres pour vos recherches',
+        '${matches.length - maxOfferAlerts} autre(s) offre(s) correspondent '
+            'à vos recherches enregistrées.',
+      );
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _guestItems(
+    LocalStore store,
+    String kind,
+  ) async => [
+    for (final item in await store.readGuestItems(kind))
+      item.cast<String, dynamic>(),
+  ];
 
   Future<List<Map<String, dynamic>>> _list(LocalStore store, String key) async {
     final value = await store.readSnapshot(key);

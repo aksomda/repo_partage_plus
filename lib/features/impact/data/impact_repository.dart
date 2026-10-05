@@ -16,6 +16,12 @@ final myImpactProvider = Provider<Json?>(
   (ref) => asJson(ref.watch(snapshotProvider('impact')).value),
 );
 
+/// Compteurs de toute la plateforme (`food_kg`, `meals`, `co2_kg`,
+/// `users`…), avec ou sans compte : affichés sur l'accueil, hors ligne aussi.
+final publicImpactProvider = Provider<Json?>(
+  (ref) => asJson(ref.watch(snapshotProvider('public_impact')).value),
+);
+
 /// Les 12 derniers mois (`month` « 2026-09 », mêmes mesures), mois vides compris.
 final myImpactMonthlyProvider = Provider<List<Json>>(
   (ref) => asJsonList(ref.watch(snapshotProvider('impact_monthly')).value),

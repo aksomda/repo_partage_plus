@@ -119,6 +119,18 @@ class LocalStore {
     await _guest.record(kind).put(db, [item, ...items]);
   }
 
+  /// Modifie quelques champs d'un élément, sans changer sa place.
+  Future<void> patchGuestItem(
+    String kind,
+    Object? id,
+    Map<String, Object?> fields,
+  ) async {
+    final items = await readGuestItems(kind);
+    await _guest.record(kind).put(db, [
+      for (final item in items) item['id'] == id ? {...item, ...fields} : item,
+    ]);
+  }
+
   // ---------- Déconnexion ----------
 
   /// Efface tout : session, données et actions en attente.

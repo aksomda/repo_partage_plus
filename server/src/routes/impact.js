@@ -276,13 +276,18 @@ export async function buildGlobalImpact(now = new Date()) {
   };
 }
 
+/** Compteurs de toute la plateforme (accueil, avec ou sans compte). */
+export async function publicImpact() {
+  const [[row], [users]] = await Promise.all([
+    query(IMPACT_SELECT),
+    query("SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'"),
+  ]);
+  return { ...formatImpact(row), users: Number(users.count) };
+}
+
 // Impact global de la plateforme (public, pour l'écran d'accueil et la démo).
 impactRouter.get('/global', async (req, res) => {
-  const [row] = await query(IMPACT_SELECT);
-  const [users] = await query(
-    "SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'",
-  );
-  res.json({ ...formatImpact(row), users: Number(users.count) });
+  res.json(await publicImpact());
 });
 
 // Répartition par catégorie, plateforme entière (tableau de bord web).

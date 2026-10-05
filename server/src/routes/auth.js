@@ -12,6 +12,7 @@ import {
 } from '../http/login_attempts.js';
 import { id, latitude, longitude } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
+import { markFirebaseSync, scheduleFirebaseSync } from '../services/firebase_sync.js';
 import { firestoreMirror } from '../services/firestore_mirror.js';
 import { consumeActivationCode, consumeCode, issueActivationCode, issueCode } from '../services/otp.js';
 
@@ -25,7 +26,10 @@ const idToken = z.string().min(20).max(5000);
  * - Firebase : le compte (email + mot de passe) est déjà créé par
  *   l'application, qui envoie son jeton ; l'email est lu dans ce jeton ;
  * - compte local (Firebase indisponible, ex. Windows/Linux sans Firebase) :
- *   email + mot de passe envoyés à l'API, mot de passe haché dans MySQL.
+ *   email + mot de passe envoyés à l'API, mot de passe haché dans MySQL ;
+ *   le compte est recopié dans Firebase en arrière-plan une fois activé.
+ * Dans les deux cas le mot de passe est haché dans MySQL : il permet de se
+ * connecter quand Firebase est injoignable (/auth/login).
  */
 export const password = z
   .string()
@@ -59,7 +63,7 @@ const registerSchema = z.object({
 });
 
 const registerModeSchema = registerSchema.refine(
-  (data) => (data.id_token ? !data.password : Boolean(data.email && data.password)),
+  (data) => Boolean(data.id_token || (data.email && data.password)),
   { message: 'Jeton Firebase, ou adresse e-mail et mot de passe, requis', path: ['id_token'] },
 );
 
@@ -68,7 +72,12 @@ const loginSchema = z.object({ email, password: z.string().min(1) });
 const resetSchema = verifySchema.extend({ password });
 
 export function publicUser(row) {
-  const { password_hash: _passwordHash, ...user } = row;
+  const {
+    password_hash: _passwordHash,
+    firebase_sync_at: _syncAt,
+    firebase_sync_password: _syncPassword,
+    ...user
+  } = row;
   return user;
 }
 
@@ -186,6 +195,11 @@ authRouter.post('/register', async (req, res) => {
       );
     }
 
+    // Compte créé sans Firebase : recopié dans Firebase une fois activé.
+    if (!identity.uid) {
+      await conn.query('UPDATE users SET firebase_sync_at = NOW(3) WHERE id = ?', [newId]);
+    }
+
     // Dans la transaction : si l'e-mail ne part pas, rien n'est enregistré.
     await issueActivationCode(conn, { id: newId, ...fields });
     return newId;
@@ -210,10 +224,22 @@ authRouter.post('/verify-email', async (req, res) => {
     "UPDATE users SET status = 'active', email_verified_at = NOW() WHERE id = ? AND status = 'pending'",
     [row.id],
   );
-  await firebase.syncEmailVerified(row.firebase_uid);
+  await activatedInFirebase(row);
 
   await session(res, row.id);
 });
+
+/**
+ * Compte activé : e-mail vérifié dans Firebase, ou plus tard si Firebase
+ * est injoignable ; compte créé sans Firebase : recopié maintenant.
+ */
+async function activatedInFirebase(row) {
+  if (!(await firebase.syncEmailVerified(row.firebase_uid))) {
+    await markFirebaseSync(row.id);
+  } else if (row.firebase_sync_at) {
+    scheduleFirebaseSync();
+  }
+}
 
 /** Renvoie un code ; répond 204 même si l'e-mail est inconnu. */
 authRouter.post('/resend-code', async (req, res) => {
@@ -236,9 +262,10 @@ authRouter.post('/password/forgot', async (req, res) => {
 });
 
 /**
- * Nouveau mot de passe avec le code reçu : changé dans Firebase (et dans
- * MySQL pour un compte local). Le code prouve l'e-mail : un compte pas
- * encore activé l'est du même coup.
+ * Nouveau mot de passe avec le code reçu : haché dans MySQL et changé dans
+ * Firebase (plus tard si Firebase est injoignable ; la connexion passe alors
+ * par MySQL). Le code prouve l'e-mail : un compte pas encore activé l'est
+ * du même coup.
  */
 authRouter.post('/password/reset', async (req, res) => {
   const data = resetSchema.parse(req.body);
@@ -250,19 +277,19 @@ authRouter.post('/password/reset', async (req, res) => {
 
   // Hors transaction : un essai raté doit rester compté.
   await consumeCode(pool, row.id, data.code, 'password_reset');
-  if (row.firebase_uid) await firebase.setPassword(row.firebase_uid, data.password);
-  if (row.password_hash || !row.firebase_uid) {
-    await query('UPDATE users SET password_hash = ? WHERE id = ?', [
-      await bcrypt.hash(data.password, 10),
-      row.id,
-    ]);
+  await query('UPDATE users SET password_hash = ? WHERE id = ?', [
+    await bcrypt.hash(data.password, 10),
+    row.id,
+  ]);
+  if (!(await firebase.setPassword(row.firebase_uid, data.password))) {
+    await markFirebaseSync(row.id, { password: true });
   }
   if (row.status === 'pending') {
     await query(
       "UPDATE users SET status = 'active', email_verified_at = NOW() WHERE id = ? AND status = 'pending'",
       [row.id],
     );
-    await firebase.syncEmailVerified(row.firebase_uid);
+    await activatedInFirebase(row);
   }
   res.status(204).end();
 });
@@ -296,9 +323,15 @@ authRouter.post('/release-orphan', async (req, res) => {
   res.status(204).end();
 });
 
-/** Connexion : l'application s'est connectée à Firebase et envoie son jeton. */
+/**
+ * Connexion : l'application s'est connectée à Firebase et envoie son jeton,
+ * avec le mot de passe saisi, haché dans MySQL pour pouvoir se connecter
+ * quand Firebase est injoignable.
+ */
 authRouter.post('/firebase', async (req, res) => {
-  const data = z.object({ id_token: idToken }).parse(req.body);
+  const data = z
+    .object({ id_token: idToken, password: z.string().min(1).max(100).optional() })
+    .parse(req.body);
   const identity = await firebase.verifyIdToken(data.id_token);
 
   // Pas de rattachement par e-mail : l'e-mail d'un compte Firebase n'est pas
@@ -311,10 +344,28 @@ authRouter.post('/firebase', async (req, res) => {
   }
 
   assertCanLogin(row);
+  await rememberPassword(row, data.password);
   await session(res, row.id);
 });
 
-/** Connexion par mot de passe, pour les comptes de démo créés sans Firebase. */
+/**
+ * Garde le mot de passe Firebase haché dans MySQL, s'il a changé. Pas pendant
+ * un changement de mot de passe pas encore recopié dans Firebase : le
+ * nouveau mot de passe (MySQL) l'emporte.
+ */
+async function rememberPassword(row, password) {
+  if (!password || row.firebase_sync_password) return;
+  if (row.password_hash && (await bcrypt.compare(password, row.password_hash))) return;
+  await query('UPDATE users SET password_hash = ? WHERE id = ?', [
+    await bcrypt.hash(password, 10),
+    row.id,
+  ]);
+}
+
+/**
+ * Connexion par mot de passe (haché dans MySQL) : comptes créés sans
+ * Firebase, et tous les comptes quand Firebase est injoignable.
+ */
 authRouter.post('/login', async (req, res) => {
   const data = loginSchema.parse(req.body);
   assertLoginAllowed(req.ip, data.email);

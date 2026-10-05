@@ -20,6 +20,7 @@ abstract final class ApiEndpoints {
   static const changePassword = '/users/me/password';
   static const devices = '/users/me/devices';
   static const donorAdvice = '/recommendations/advice';
+  static const offerDraft = '/recommendations/offer-draft';
 
   // Référentiels
   static const categories = '/categories';

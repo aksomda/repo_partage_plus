@@ -15,14 +15,24 @@ class FirebaseAuthFailure implements Exception {
   final String code;
   final String message;
 
-  /// Identifiants refusés ou Firebase absent : on peut tenter l'ancienne
-  /// connexion de l'API (comptes de démo).
-  bool get allowsLegacyLogin => const {
-    'not-configured',
-    'invalid-credential',
-    'user-not-found',
-    'wrong-password',
+  /// Firebase injoignable (réseau, panne) : l'API (MySQL) prend le relais.
+  bool get isUnavailable => const {
+    'network-request-failed',
+    'internal-error',
+    'unavailable',
   }.contains(code);
+
+  /// Identifiants refusés, Firebase absent ou injoignable : on tente la
+  /// connexion par l'API, avec le mot de passe gardé haché dans MySQL
+  /// (comptes de démo, mot de passe changé pendant une panne de Firebase).
+  bool get allowsLegacyLogin =>
+      isUnavailable ||
+      const {
+        'not-configured',
+        'invalid-credential',
+        'user-not-found',
+        'wrong-password',
+      }.contains(code);
 
   @override
   String toString() => message;
@@ -87,6 +97,12 @@ class FirebaseAuthGateway implements AuthGateway {
       return await action();
     } on FirebaseAuthException catch (error) {
       throw FirebaseAuthFailure(error.code, _message(error.code));
+    } on FirebaseAuthFailure {
+      rethrow;
+    } catch (error) {
+      // Autre erreur de Firebase (plugin, service indisponible…) : traitée
+      // comme une panne, l'application passe par l'API.
+      throw FirebaseAuthFailure('unavailable', '$_unreachable ($error)');
     }
   }
 

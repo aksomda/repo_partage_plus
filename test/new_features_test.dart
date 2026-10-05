@@ -237,8 +237,12 @@ void main() {
     expect(find.text('Particulier'), findsOneWidget);
     expect(find.text('Mes informations'), findsOneWidget);
     expect(find.text('Changer mon mot de passe'), findsOneWidget);
-    final push = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
-    expect(push.value, isFalse);
+    expect(find.text('Mes préférences'), findsOneWidget);
+    final switches = tester
+        .widgetList<SwitchListTile>(find.byType(SwitchListTile))
+        .toList();
+    // Push désactivé dans le compte ; alertes de recherche actives par défaut.
+    expect(switches.map((s) => s.value), [false, true]);
   });
 
   testWidgets('mes offres : modifier une offre (pré-remplie, hors ligne)', (

@@ -29,9 +29,14 @@ CREATE TABLE IF NOT EXISTS users (
   gender ENUM('male', 'female') NULL,
   age TINYINT UNSIGNED NULL,
   email VARCHAR(190) NOT NULL,
-  -- NULL pour les comptes Firebase : le mot de passe est géré par Firebase Auth.
+  -- Copie hachée du mot de passe Firebase : connexion par MySQL quand
+  -- Firebase est injoignable. NULL pour un compte jamais connecté depuis.
   password_hash VARCHAR(255) NULL,
   firebase_uid VARCHAR(128) NULL,
+  -- Changement à recopier dans Firebase Auth (Firebase injoignable au moment
+  -- du changement) ; firebase_sync_password : le mot de passe aussi.
+  firebase_sync_at DATETIME(3) NULL,
+  firebase_sync_password TINYINT(1) NOT NULL DEFAULT 0,
   role ENUM('donor', 'beneficiary', 'association', 'admin') NOT NULL,
   actor_id INT UNSIGNED NULL,
   phone VARCHAR(30) NULL,

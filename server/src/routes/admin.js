@@ -7,6 +7,7 @@ import { authenticate, requireRole } from '../http/auth.js';
 import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam, pagination, reason } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
+import { markFirebaseSync } from '../services/firebase_sync.js';
 import { firestoreMirror } from '../services/firestore_mirror.js';
 import { runScheduledJobs } from '../services/jobs.js';
 import { sendMail } from '../services/mailer.js';
@@ -307,6 +308,9 @@ adminRouter.post('/users', async (req, res) => {
     });
   }
 
+  // Firebase injoignable : compte recopié en arrière-plan.
+  if (!firebaseUid) await markFirebaseSync(result.insertId);
+
   const [user] = await query(`${USER_SELECT} WHERE u.id = ?`, [result.insertId]);
   res.status(201).json(user);
 });
@@ -371,7 +375,9 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
     'SELECT firebase_uid FROM users WHERE id = ?',
     [userId],
   );
-  await firebase.syncDisabled(firebaseUid, data.status === 'suspended');
+  if (!(await firebase.syncDisabled(firebaseUid, data.status === 'suspended'))) {
+    await markFirebaseSync(userId);
+  }
 
   await notify(pool, userId, {
     type: 'account_status',

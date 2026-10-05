@@ -53,7 +53,7 @@ export const config = {
     secure: env.SMTP_SECURE === 'true',
     user: env.SMTP_USER || null,
     password: env.SMTP_PASSWORD || null,
-    from: env.MAIL_FROM || 'Partage+ <no-reply@partage-plus.local>',
+    from: env.MAIL_FROM || 'Partage+ <a.ksomda@gmail.com>',
   },
   // Envoi des e-mails : 'firebase' (extension Trigger Email, collection
   // Firestore) ou 'smtp'. Avec Firebase, SMTP sert de secours s'il est rempli.

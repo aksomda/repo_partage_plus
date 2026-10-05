@@ -14,6 +14,7 @@ const { migrate } = await import('../src/db/migrate.js');
 const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
+const { syncFirebaseAccounts } = await import('../src/services/firebase_sync.js');
 const { purgeFirebaseMails, sentMails, setMailStore } = await import(
   '../src/services/mailer.js'
 );
@@ -31,7 +32,7 @@ const { resetLoginAttempts, MAX_FAILURES } = await import('../src/http/login_att
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
 const firebaseCalls = [];
 const firebaseUsers = new Map();
-setFirebaseGateway({
+const fakeFirebase = {
   async verifyIdToken(idToken) {
     const [prefix, uid, email] = idToken.split(':');
     if (prefix !== 'fake') throw new HttpError(401, 'Session Firebase invalide ou expirée');
@@ -60,7 +61,8 @@ setFirebaseGateway({
       if (user.uid === uid) firebaseUsers.delete(email);
     }
   },
-});
+};
+setFirebaseGateway(fakeFirebase);
 
 // Faux Firestore : documents gardés en mémoire, par collection puis par id.
 const firestoreDocs = {};
@@ -221,7 +223,7 @@ describe('authentification', () => {
     assert.equal(res.status, 200);
     assert.deepEqual(
       res.body.map((actor) => actor.code).sort(),
-      ['commercant', 'particulier', 'restaurateur'],
+      ['association', 'commercant', 'particulier', 'restaurateur'],
     );
   });
 
@@ -2004,6 +2006,86 @@ describe('indicateurs IA du donateur et indicateurs sociaux de la plateforme', (
     assert.equal(down.body.source, 'rules');
   });
 
+  test('publication express : brouillon d’offre réservé aux restaurateurs', async () => {
+    const restaurant = { Authorization: `Bearer ${await login('restaurant@demo.local')}` };
+    const text = 'Il me reste 5 plats de riz gras, gratuit, à prendre avant 20h';
+    config.rodium.apiKey = 'rd_sk_test';
+    resetAiRateLimit();
+
+    // Commerçant : refusé, même avec l'IA configurée.
+    const shop = await api.post('/api/recommendations/offer-draft').set(as('donor')).send({ text });
+    assert.equal(shop.status, 403, shop.text);
+
+    let prompt;
+    setRodiumFetch(async (url, options) => {
+      prompt = JSON.parse(JSON.parse(options.body).messages[1].content);
+      const draft = {
+        title: 'Riz gras',
+        category_id: categoryId,
+        description: 'Riz gras du jour.',
+        quantity: 5,
+        unit: 'plat',
+        weight_kg: 'inconnu',
+        price: 0,
+        expiry_in_days: 0,
+        pickup_start: null,
+        pickup_end: '20:00',
+      };
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '```json\n' + JSON.stringify(draft) + '\n```' } }] }),
+        { status: 200 },
+      );
+    });
+    const ok = await api
+      .post('/api/recommendations/offer-draft')
+      .set(restaurant)
+      .send({ text, local_time: '17:30' });
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(ok.body.source, 'ai');
+    assert.deepEqual(
+      ok.body.draft,
+      {
+        title: 'Riz gras',
+        category_id: categoryId,
+        description: 'Riz gras du jour.',
+        quantity: 5,
+        unit: 'plat',
+        weight_kg: null,
+        price: 0,
+        expiry_in_days: 0,
+        pickup_start: null,
+        pickup_end: '20:00',
+      },
+    );
+    assert.equal(prompt.heure_locale, '17:30');
+    assert.ok(prompt.categories.some((category) => category.id === categoryId));
+
+    // Catégorie inventée par le modèle : écartée, le reste est gardé.
+    setRodiumFetch(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ title: 'Pains', category_id: 99999, quantity: 0 }) } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const invented = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(invented.status, 200, invented.text);
+    assert.equal(invented.body.draft.category_id, null);
+    assert.equal(invented.body.draft.quantity, null);
+
+    // IA en panne : 503 explicite, le formulaire classique reste utilisable.
+    setRodiumFetch(async () => new Response('panne', { status: 502 }));
+    const down = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(down.status, 503);
+    assert.equal(down.body.details.code, 'ai_unavailable');
+
+    config.rodium.apiKey = null;
+    const off = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(off.status, 503);
+    assert.equal(off.body.details.code, 'ai_not_configured');
+  });
+
   test('impact de la plateforme : indicateurs sociaux', async () => {
     const res = await api.get('/api/admin/impact').set(as('admin'));
     assert.equal(res.status, 200, res.text);
@@ -2190,5 +2272,264 @@ describe('modification sans compte et créneaux d’une offre réservée', () =>
       .set('X-Guest-Token', created.guest_token)
       .send({ slots: [{ start: futureIso(-5), end: futureIso(-4) }] });
     assert.equal(past.status, 400);
+  });
+});
+
+describe('dates de publication, alertes de recherche, compteurs publics', () => {
+  let categoryId;
+  const offer = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Pain du soir',
+    quantity: 3,
+    unit: 'baguette',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(1),
+    pickup_end: futureIso(3),
+    address: 'Boulangerie du marché',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+  });
+
+  test('retrait déjà terminé ou après la date limite : refusé', async () => {
+    const past = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ pickup_start: futureIso(-3), pickup_end: futureIso(-1) }));
+    assert.equal(past.status, 400);
+    assert.equal(past.body.details.code, 'pickup_in_past');
+
+    const today = new Date().toISOString().slice(0, 10);
+    const late = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ expiry_date: today, pickup_start: futureIso(1), pickup_end: futureIso(30) }));
+    assert.equal(late.status, 400);
+    assert.equal(late.body.details.code, 'pickup_after_expiry');
+
+    const expired = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ expiry_date: '2020-01-01' }));
+    assert.equal(expired.status, 400);
+    assert.equal(expired.body.details.field, 'expiry_date');
+  });
+
+  test('recherche enregistrée : le compte est notifié de la nouvelle offre', async () => {
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({
+        latitude: 12.371,
+        longitude: -1.519,
+        preferences: {
+          search_alerts: null,
+          favorites: { offer_ids: [], searches: [{ name: 'Pain', text: 'pain', radius_km: 5 }] },
+        },
+      });
+
+    const created = await api.post('/api/offers').set(as('donor')).send(offer());
+    assert.equal(created.status, 201, created.text);
+    const far = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ title: 'Pain lointain', latitude: 14, longitude: 2 }));
+    assert.equal(far.status, 201, far.text);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const notifications = (await api.get('/api/notifications').set(as('beneficiary'))).body;
+    const alerts = notifications.filter((n) => n.type === 'search_match');
+    const offerIds = alerts.map((n) => (typeof n.data === 'string' ? JSON.parse(n.data) : n.data).offer_id);
+    assert.ok(offerIds.includes(created.body.id));
+    assert.ok(!offerIds.includes(far.body.id), 'hors du rayon : pas d’alerte');
+
+    // Alertes coupées dans le profil : plus rien.
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { search_alerts: false } });
+    const muted = await api.post('/api/offers').set(as('donor')).send(offer({ title: 'Pain muet' }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const after = (await api.get('/api/notifications').set(as('beneficiary'))).body;
+    assert.ok(
+      !after.some(
+        (n) =>
+          n.type === 'search_match' &&
+          (typeof n.data === 'string' ? JSON.parse(n.data) : n.data).offer_id === muted.body.id,
+      ),
+    );
+  });
+
+  test('compteurs de la plateforme dans les instantanés, avec ou sans compte', async () => {
+    const guest = await api.get('/api/sync/public');
+    assert.equal(typeof guest.body.public_impact.food_kg, 'number');
+    assert.equal(typeof guest.body.public_impact.users, 'number');
+    const account = await api.get('/api/sync').set(as('beneficiary'));
+    assert.deepEqual(account.body.public_impact, guest.body.public_impact);
+  });
+});
+
+describe('Firebase injoignable, MySQL disponible : rien de bloqué, recopie ensuite', () => {
+  const saved = {};
+  const imports = [];
+  const updates = [];
+  const unreachable = () => {
+    throw new Error('getaddrinfo ENOTFOUND identitytoolkit.googleapis.com');
+  };
+
+  /** Coupe (ou rétablit) Firebase dans le faux Firebase. */
+  function firebaseDown(down) {
+    for (const name of ['setDisabled', 'markEmailVerified', 'setPassword', 'createUser']) {
+      saved[name] ??= fakeFirebase[name];
+      fakeFirebase[name] = down ? unreachable : saved[name];
+    }
+    saved.verifyIdToken ??= fakeFirebase.verifyIdToken;
+    fakeFirebase.verifyIdToken = down
+      ? () => {
+          throw new HttpError(503, 'Firebase momentanément indisponible', {
+            code: 'firebase_unavailable',
+          });
+        }
+      : saved.verifyIdToken;
+    fakeFirebase.importUser = down ? unreachable : async (account) => imports.push(account);
+    fakeFirebase.updateUser = down ? unreachable : async (uid, account) => updates.push([uid, account]);
+  }
+
+  const syncState = async (email) =>
+    (
+      await pool.query(
+        'SELECT firebase_uid, firebase_sync_at, firebase_sync_password FROM users WHERE email = ?',
+        [email],
+      )
+    )[0][0];
+
+  before(() => resetLoginAttempts());
+  after(() => {
+    firebaseDown(false);
+    delete fakeFirebase.importUser;
+    delete fakeFirebase.updateUser;
+  });
+
+  test('connexion Firebase : mot de passe gardé haché, connexion par MySQL pendant la panne', async () => {
+    const token = fakeToken('uid-nouveau', 'nouveau@test.local');
+    const ok = await api.post('/api/auth/firebase').send({ id_token: token, password: 'Panne2026' });
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(ok.body.user.firebase_sync_at, undefined);
+
+    firebaseDown(true);
+    const refused = await api.post('/api/auth/firebase').send({ id_token: token });
+    assert.equal(refused.status, 503);
+    assert.equal(refused.body.details.code, 'firebase_unavailable');
+
+    const fallback = await api
+      .post('/api/auth/login')
+      .send({ email: 'nouveau@test.local', password: 'Panne2026' });
+    assert.equal(fallback.status, 200, fallback.text);
+  });
+
+  test('nouveau mot de passe pendant la panne : accepté, recopié dans Firebase ensuite', async () => {
+    // Code déjà demandé plus haut : délai d'une minute levé.
+    await pool.query(
+      "DELETE o FROM email_otps o JOIN users u ON u.id = o.user_id WHERE u.email = 'nouveau@test.local'",
+    );
+    const forgot = await api.post('/api/auth/password/forgot').send({ email: 'nouveau@test.local' });
+    assert.equal(forgot.status, 204, forgot.text);
+    const res = await api.post('/api/auth/password/reset').send({
+      email: 'nouveau@test.local',
+      code: lastCode('nouveau@test.local'),
+      password: 'Nouveau2026',
+    });
+    assert.equal(res.status, 204, res.text);
+    const marked = await syncState('nouveau@test.local');
+    assert.ok(marked.firebase_sync_at);
+    assert.equal(marked.firebase_sync_password, 1);
+
+    const login = await api
+      .post('/api/auth/login')
+      .send({ email: 'nouveau@test.local', password: 'Nouveau2026' });
+    assert.equal(login.status, 200, login.text);
+
+    // Toujours en panne : rien de perdu, nouvel essai plus tard.
+    assert.equal(await syncFirebaseAccounts(), 0);
+    assert.ok((await syncState('nouveau@test.local')).firebase_sync_at);
+
+    firebaseDown(false);
+    assert.ok((await syncFirebaseAccounts()) >= 1);
+    const account = imports.find((item) => item.email === 'nouveau@test.local');
+    assert.equal(account.uid, 'uid-nouveau');
+    assert.ok(account.passwordHash.startsWith('$2'));
+    const cleared = await syncState('nouveau@test.local');
+    assert.equal(cleared.firebase_sync_at, null);
+    assert.equal(cleared.firebase_sync_password, 0);
+  });
+
+  test('désactivation pendant la panne : faite dans MySQL, recopiée dans Firebase ensuite', async () => {
+    const [{ id }] = (
+      await pool.query('SELECT id FROM users WHERE email = ?', ['nouveau@test.local'])
+    )[0];
+    firebaseDown(true);
+    const res = await api
+      .patch(`/api/admin/users/${id}/status`)
+      .set(as('admin'))
+      .send({ status: 'suspended', reason: 'Test de panne' });
+    assert.equal(res.status, 200, res.text);
+    assert.ok((await syncState('nouveau@test.local')).firebase_sync_at);
+
+    firebaseDown(false);
+    await syncFirebaseAccounts();
+    // Mot de passe non concerné : seul l'état est mis à jour.
+    assert.deepEqual(updates.at(-1), [
+      'uid-nouveau',
+      {
+        email: 'nouveau@test.local',
+        displayName: 'Awa Traoré',
+        emailVerified: true,
+        disabled: true,
+      },
+    ]);
+
+    await api
+      .patch(`/api/admin/users/${id}/status`)
+      .set(as('admin'))
+      .send({ status: 'active' });
+  });
+
+  test('compte créé pendant la panne : recopié dans Firebase une fois activé', async () => {
+    firebaseDown(true);
+    const [actor] = (await api.get('/api/actors')).body;
+    const created = await api.post('/api/auth/register').send({
+      email: 'panne@test.local',
+      password: 'motdepasse1',
+      first_name: 'Ina',
+      last_name: 'Sawadogo',
+      gender: 'female',
+      age: 28,
+      phone: '+226 70 99 88 77',
+      actor_id: actor.id,
+    });
+    assert.equal(created.status, 201, created.text);
+    assert.ok((await syncState('panne@test.local')).firebase_sync_at);
+
+    // Pas encore activé : pas recopié.
+    firebaseDown(false);
+    await syncFirebaseAccounts();
+    assert.ok(!imports.some((item) => item.email === 'panne@test.local'));
+
+    const verified = await api
+      .post('/api/auth/verify-email')
+      .send({ email: 'panne@test.local', code: lastCode('panne@test.local') });
+    assert.equal(verified.status, 200, verified.text);
+    await syncFirebaseAccounts();
+
+    const account = imports.find((item) => item.email === 'panne@test.local');
+    assert.ok(account.uid);
+    assert.equal(account.emailVerified, true);
+    const state = await syncState('panne@test.local');
+    assert.equal(state.firebase_uid, account.uid);
+    assert.equal(state.firebase_sync_at, null);
   });
 });

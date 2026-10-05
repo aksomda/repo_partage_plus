@@ -6,7 +6,7 @@ import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
 import { HttpError } from '../http/errors.js';
 import { latitude, longitude } from '../http/validation.js';
-import { loadProfile } from './auth.js';
+import { loadProfile, password } from './auth.js';
 
 export const usersRouter = Router();
 
@@ -44,7 +44,8 @@ const updateSchema = z
 
 const passwordSchema = z.object({
   current_password: z.string().min(1),
-  new_password: z.string().min(8).max(100),
+  // Mêmes règles qu'à l'inscription (8 caractères, une lettre, un chiffre).
+  new_password: password,
 });
 
 usersRouter.patch('/me', async (req, res) => {

@@ -1,4 +1,5 @@
 import { transaction } from '../db/pool.js';
+import { syncFirebaseAccounts } from './firebase_sync.js';
 import { firestoreMirror } from './firestore_mirror.js';
 import { purgeFirebaseMails } from './mailer.js';
 import { releaseQuantity } from '../routes/reservations.js';
@@ -198,5 +199,11 @@ export async function runScheduledJobs() {
   firestoreMirror.changed();
   // Les e-mails (codes d'activation) ne restent pas dans Firestore.
   const purgedMails = await purgeFirebaseMails();
-  return purgedMails > 0 ? { ...result, purged_mails: purgedMails } : result;
+  // Comptes modifiés pendant une panne de Firebase : nouvel essai.
+  const firebaseAccounts = await syncFirebaseAccounts();
+  return {
+    ...result,
+    ...(purgedMails > 0 ? { purged_mails: purgedMails } : {}),
+    ...(firebaseAccounts > 0 ? { firebase_accounts: firebaseAccounts } : {}),
+  };
 }

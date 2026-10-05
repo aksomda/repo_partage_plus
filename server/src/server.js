@@ -1,5 +1,6 @@
 import { app } from './app.js';
 import { config } from './config.js';
+import { scheduleFirebaseSync } from './services/firebase_sync.js';
 import { firestoreMirror } from './services/firestore_mirror.js';
 import { runScheduledJobs } from './services/jobs.js';
 import { checkMailer } from './services/mailer.js';
@@ -20,6 +21,8 @@ app.listen(config.port, () => {
   checkMailer().then(console.log);
   // Rattrape ce qui a changé pendant l'arrêt (tout, la première fois).
   firestoreMirror.changed();
+  // Comptes modifiés pendant une panne de Firebase.
+  scheduleFirebaseSync();
 });
 
 if (config.jobs.intervalMinutes > 0) {

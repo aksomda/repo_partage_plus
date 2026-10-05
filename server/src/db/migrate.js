@@ -14,6 +14,14 @@ export const DEFAULT_ACTORS = [
   ['particulier', 'Particulier', 'Je souhaite récupérer des produits', 'person', 'beneficiary', true],
   ['commercant', 'Commerçant', 'Je souhaite publier des produits', 'storefront', 'donor', true],
   ['restaurateur', 'Restaurateur', 'Je souhaite publier des produits', 'restaurant', 'donor', true],
+  [
+    'association',
+    'Association',
+    'J’aide les personnes défavorisées et récupère des produits pour elles',
+    'volunteer_activism',
+    'association',
+    true,
+  ],
   ['administrateur', 'Administrateur', 'Gère la plateforme', 'admin_panel_settings', 'admin', false],
 ];
 
@@ -24,6 +32,8 @@ const USER_COLUMNS = {
   gender: "ENUM('male', 'female') NULL AFTER last_name",
   age: 'TINYINT UNSIGNED NULL AFTER gender',
   firebase_uid: 'VARCHAR(128) NULL AFTER password_hash',
+  firebase_sync_at: 'DATETIME(3) NULL AFTER firebase_uid',
+  firebase_sync_password: 'TINYINT(1) NOT NULL DEFAULT 0 AFTER firebase_sync_at',
   actor_id: 'INT UNSIGNED NULL AFTER role',
   email_verified_at: 'DATETIME NULL AFTER status_reason',
   preferences: 'JSON NULL AFTER longitude',
@@ -127,11 +137,27 @@ async function upgrade(conn) {
     }
   }
 
+  // Bases créées avant l'acteur « Association » : ajouté une seule fois, s'il
+  // n'existe encore aucun acteur avec ces droits (l'admin peut le désactiver).
+  const [[{ associations }]] = await conn.query(
+    "SELECT COUNT(*) AS associations FROM actors WHERE permission_role = 'association'",
+  );
+  if (associations === 0) {
+    const index = DEFAULT_ACTORS.findIndex(([code]) => code === 'association');
+    const [code, label, description, icon, role, selfSignup] = DEFAULT_ACTORS[index];
+    await conn.query(
+      `INSERT IGNORE INTO actors (code, label, description, icon, permission_role, self_signup, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [code, label, description, icon, role, selfSignup, index],
+    );
+  }
+
   // Comptes antérieurs aux acteurs : rattachés d'après leurs droits.
   await conn.query(`UPDATE users u
     JOIN actors a ON a.code = CASE u.role
       WHEN 'beneficiary' THEN 'particulier'
       WHEN 'donor' THEN 'commercant'
+      WHEN 'association' THEN 'association'
       WHEN 'admin' THEN 'administrateur'
     END
     SET u.actor_id = a.id

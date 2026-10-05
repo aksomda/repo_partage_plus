@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
 /// Nombre maximal de créneaux par offre (comme le serveur).
@@ -77,6 +78,16 @@ class _SlotsEditorState extends State<_SlotsEditor> {
       (id: slot.id, start: slot.start, end: slot.end),
   ];
 
+  /// Créneau modifié ou ajouté : fin dans le futur, au plus tard le jour de
+  /// la date limite (sinon refusé par le serveur).
+  bool _checkDates(DateTime end) {
+    final expiry = DateTime.tryParse('${widget.offer['expiry_date']}');
+    if (expiry == null) return true;
+    final problem = pickupDatesError([end], expiry);
+    if (problem != null) showMessage(context, problem, error: true);
+    return problem == null;
+  }
+
   Future<void> _edit(int index) async {
     final slot = _slots[index];
     final start = await pickSlotDateTime(
@@ -95,6 +106,7 @@ class _SlotsEditorState extends State<_SlotsEditor> {
       showMessage(context, 'La fin doit être après le début', error: true);
       return;
     }
+    if (!_checkDates(end)) return;
     setState(() => _slots[index] = (id: slot.id, start: start, end: end));
   }
 
@@ -118,6 +130,7 @@ class _SlotsEditorState extends State<_SlotsEditor> {
       showMessage(context, 'La fin doit être après le début', error: true);
       return;
     }
+    if (!_checkDates(end)) return;
     setState(() => _slots.add((id: null, start: start, end: end)));
   }
 

@@ -14,6 +14,7 @@ import {
   refineRecommendations,
 } from '../services/ai_refine.js';
 import { donorInsights } from '../services/insights.js';
+import { buildDraftMessages, DRAFT_LIMITS, parseDraft } from '../services/offer_draft.js';
 import { DISTANCE_KM, OFFER_AVAILABLE, PUBLISHER_TYPE } from '../services/offers.js';
 import { buildDashboard } from './impact.js';
 
@@ -221,5 +222,61 @@ aiRouter.post('/advice', authenticate, async (req, res) => {
     if (!(error instanceof ModelError) && !(error instanceof HttpError)) throw error;
     console.warn('Conseil IA indisponible :', error.message);
     res.json(fallback);
+  }
+});
+
+// ---------- Publication express (restaurateurs) ----------
+
+const draftSchema = z.object({
+  text: z.string().trim().min(5, 'Décrivez votre offre en quelques mots').max(DRAFT_LIMITS.text),
+  // Heure de l'appareil (« avant 20h », « ce soir ») : le serveur ignore son fuseau.
+  local_time: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .optional(),
+});
+
+/** Réservé aux comptes dont l'acteur est « restaurateur ». */
+async function requireRestaurateur(req) {
+  const [row] = await query(
+    'SELECT a.code FROM users u LEFT JOIN actors a ON a.id = u.actor_id WHERE u.id = ?',
+    [req.user.id],
+  );
+  if (row?.code !== 'restaurateur') {
+    throw new HttpError(403, 'Publication express réservée aux restaurateurs');
+  }
+}
+
+// Brouillon d'offre à partir d'une description libre ; rien n'est publié.
+// IA absente ou en panne : 503, le formulaire classique reste utilisable.
+aiRouter.post('/offer-draft', authenticate, async (req, res) => {
+  await requireRestaurateur(req);
+  const data = draftSchema.parse(req.body);
+  if (!config.rodium.apiKey) {
+    throw new HttpError(503, 'IA non configurée sur le serveur', { code: 'ai_not_configured' });
+  }
+  checkRate(`draft:${req.user.id}`);
+
+  const categories = await query('SELECT id, name FROM categories ORDER BY name');
+  try {
+    const content = await callRodium({
+      apiKey: config.rodium.apiKey,
+      model: config.rodium.model,
+      fetchImpl: fetchImpl ?? undefined,
+      messages: buildDraftMessages({
+        text: data.text,
+        categories,
+        localTime: data.local_time,
+      }),
+    });
+    const draft = parseDraft(
+      content,
+      categories.map((category) => category.id),
+    );
+    res.json({ draft, source: 'ai' });
+  } catch (error) {
+    if (!(error instanceof ModelError)) throw error;
+    console.warn('Brouillon IA indisponible :', error.message);
+    throw new HttpError(503, 'Service d’IA indisponible', { code: 'ai_unavailable' });
   }
 });

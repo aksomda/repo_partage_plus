@@ -1,3 +1,5 @@
+import { HttpError } from '../http/errors.js';
+
 /** Nom du publieur : compte, ou prénom et nom saisis par l'invité. */
 export const DONOR_NAME = `COALESCE(u.name, CONCAT(o.guest_first_name, ' ', o.guest_last_name))`;
 
@@ -41,6 +43,39 @@ export function normalizeSlots(data) {
     pickupStart: slots[0].start,
     pickupEnd: new Date(Math.max(...slots.map((slot) => slot.end.getTime()))),
   };
+}
+
+/**
+ * Fin du jour de la date limite. En UTC, comme toutes les dates stockées
+ * (heure locale du Burkina Faso et des pays voisins).
+ */
+export function expiryEnd(expiryDate) {
+  return new Date(`${expiryDate}T23:59:59.999Z`);
+}
+
+/**
+ * Dates cohérentes à la publication : date limite pas encore passée, chaque
+ * créneau se termine dans le futur, et au plus tard le jour de la date limite
+ * (sinon l'offre disparaîtrait aussitôt, ou se retirerait périmée).
+ */
+export function assertPickupDates(slots, expiryDate, now = new Date()) {
+  const limit = expiryEnd(expiryDate);
+  if (limit <= now) {
+    throw new HttpError(400, 'La date limite est déjà passée', { field: 'expiry_date' });
+  }
+  if (slots.some((slot) => slot.end <= now)) {
+    throw new HttpError(400, 'Chaque créneau de retrait doit se terminer dans le futur', {
+      field: 'pickup_end',
+      code: 'pickup_in_past',
+    });
+  }
+  if (slots.some((slot) => slot.end > limit)) {
+    throw new HttpError(
+      400,
+      'Le retrait doit se terminer au plus tard le jour de la date limite',
+      { field: 'pickup_end', code: 'pickup_after_expiry' },
+    );
+  }
 }
 
 /** Remplace les créneaux de l'offre. */

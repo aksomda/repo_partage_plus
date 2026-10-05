@@ -23,8 +23,11 @@ import {
 import { donorInsights } from '../services/insights.js';
 import { notify } from '../services/notifications.js';
 import { photoSchema, savePhoto } from '../services/photos.js';
+import { notifySearchMatches } from '../services/search_alerts.js';
 import {
+  assertPickupDates,
   DISTANCE_KM,
+  expiryEnd,
   DONOR_NAME,
   PUBLISHER_TYPE,
   OFFER_AVAILABLE,
@@ -240,6 +243,7 @@ offersRouter.post('/', optionalAuth, async (req, res) => {
   }
   const data = offerSchema.parse(req.body);
   const { slots, pickupStart, pickupEnd } = normalizeSlots(data);
+  assertPickupDates(slots, data.expiry_date);
   const guest = req.user ? null : guestOfferSchema.parse(req.body).guest;
   if (guest) await assertGuestQuota('offer', guest.phone, req.ip);
 
@@ -282,6 +286,10 @@ offersRouter.post('/', optionalAuth, async (req, res) => {
   });
 
   const [offer] = await query(`${OWN_OFFER_SELECT} WHERE o.id = ?`, [offerId]);
+  // Alertes des recherches enregistrées : sans faire attendre le publieur.
+  notifySearchMatches(offer).catch((error) =>
+    console.error('Alertes de recherche non envoyées :', error.message),
+  );
   // Le jeton n'est remis qu'une fois : l'application le garde sur l'appareil.
   res.status(201).json(guestToken ? { ...offer, guest_token: guestToken } : offer);
 });
@@ -293,6 +301,7 @@ offersRouter.put('/:id', optionalAuth, async (req, res) => {
   const { id: offerId } = idParam.parse(req.params);
   const data = offerSchema.parse(req.body);
   const { slots, pickupStart, pickupEnd } = normalizeSlots(data);
+  assertPickupDates(slots, data.expiry_date);
   const offer = await loadOwnOffer(offerId, req);
 
   // Offre retirée par l'administrateur : plus modifiable (pas de republication).
@@ -402,6 +411,13 @@ offersRouter.patch('/:id/slots', optionalAuth, async (req, res) => {
       throw new HttpError(400, 'Un créneau modifié ou ajouté doit finir dans le futur', {
         field: 'slots',
       });
+    }
+    if (changed.some((slot) => slot.end > expiryEnd(offer.expiry_date))) {
+      throw new HttpError(
+        400,
+        'Le retrait doit se terminer au plus tard le jour de la date limite',
+        { field: 'slots', code: 'pickup_after_expiry' },
+      );
     }
 
     const kept = new Set(slots.filter((slot) => slot.id).map((slot) => slot.id));

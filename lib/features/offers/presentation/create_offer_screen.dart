@@ -19,7 +19,9 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/offers/data/offer_draft.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
+import 'package:repo_partage_plus/features/offers/presentation/widgets/express_draft_card.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
 /// Publication d'une offre, avec ou sans compte. L'offre est visible tout
@@ -137,6 +139,38 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
       _place = Place(lat: lat, lng: lng, label: address);
     }
     _currentPhotoUrl = offerPhotoUrl(offer);
+  }
+
+  /// Publication express : champs remplis avec le brouillon de l'IA ; un
+  /// champ absent du brouillon garde sa valeur.
+  void _applyDraft(Json draft) {
+    final categories = ref.read(categoriesProvider);
+    setState(() {
+      if (draft['category_id'] case final int id
+          when categories.any((category) => category['id'] == id)) {
+        _categoryId = id;
+      }
+      if (draft['title'] case final String title) _title.text = title;
+      if (draft['description'] case final String text) _description.text = text;
+      if (draft['quantity'] case final int quantity) {
+        _quantity.text = '$quantity';
+      }
+      if (draft['unit'] case final String unit) _unit.text = unit;
+      if (draft['weight_kg'] case final num weight) _weight.text = '$weight';
+      final price = draft['price'] as num? ?? 0;
+      _free = price == 0;
+      if (price > 0) _price.text = price.round().toString();
+      final dates = draftDates(draft, DateTime.now());
+      if (dates.expiry case final expiry?) _expiry = expiry;
+      if (dates.pickupStart case final start?) _pickupStart = start;
+      if (dates.pickupEnd case final end?) {
+        _pickupEnd = end;
+        _extraSlots.clear();
+        // La DLC ne peut précéder la fin du retrait.
+        final endDay = DateTime(end.year, end.month, end.day);
+        if (_expiry.isBefore(endDay)) _expiry = endDay;
+      }
+    });
   }
 
   /// Position GPS exacte au moment de publier (la position mémorisée peut
@@ -352,6 +386,11 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
 
     final slots = [(start: _pickupStart, end: _pickupEnd), ..._extraSlots]
       ..sort((a, b) => a.start.compareTo(b.start));
+    if (pickupDatesError(slots.map((slot) => slot.end), _expiry)
+        case final problem?) {
+      showMessage(context, problem, error: true);
+      return;
+    }
     final firstStart = slots.first.start;
     final lastEnd = slots
         .map((slot) => slot.end)
@@ -519,6 +558,8 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (!_editing && ref.watch(canUseExpressDraftProvider))
+                      ExpressDraftCard(onDraft: _applyDraft),
                     FieldGrid(
                       children: [
                         FieldSpan.full(

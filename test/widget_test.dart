@@ -629,8 +629,13 @@ void main() {
           find.byType(CustomScrollView),
           const Offset(0, -200),
         );
-        expect(find.text('Offre lointaine'), findsNothing);
         expect(find.text('250 F CFA'), findsOneWidget);
+        // Rayon illimité par défaut : l'offre lointaine aussi, après les proches.
+        await tester.dragUntilVisible(
+          find.text('Offre lointaine'),
+          find.byType(CustomScrollView),
+          const Offset(0, -200),
+        );
       },
     );
 

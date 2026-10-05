@@ -107,40 +107,7 @@ class GuestRepository {
 
   /// Relit sur le serveur l'état des publications et réservations locales.
   /// Silencieux hors ligne : les copies locales restent affichées.
-  Future<void> refresh() async {
-    for (final offer in await _store.readGuestItems('offers')) {
-      await _refreshOne(
-        'offers',
-        offer,
-        ApiEndpoints.offer(offer['id']! as int),
-      );
-    }
-    for (final reservation in await _store.readGuestItems('reservations')) {
-      await _refreshOne(
-        'reservations',
-        reservation,
-        ApiEndpoints.guestReservation(reservation['id']! as int),
-      );
-    }
-  }
-
-  Future<void> _refreshOne(String kind, Json item, String path) async {
-    try {
-      final response = await _dio.get<Map<String, dynamic>>(
-        path,
-        options: _auth(item),
-      );
-      await _store.saveGuestItem(kind, {
-        ...response.data!,
-        'guest_token': item['guest_token'],
-      });
-    } on DioException catch (error) {
-      // Offre retirée ou expirée côté serveur : on garde la dernière copie.
-      if (error.response?.statusCode == 404) {
-        await _store.saveGuestItem(kind, {...item, 'status': 'unavailable'});
-      }
-    }
-  }
+  Future<void> refresh() => refreshGuestItems(_dio, _store);
 
   /// Modifie une publication faite sans compte (jeton de l'appareil).
   Future<Json> updateOffer(Json offer, Map<String, Object?> changes) async {
@@ -221,3 +188,66 @@ class GuestRepository {
 }
 
 final guestRepositoryProvider = Provider<GuestRepository>(GuestRepository.new);
+
+/// Statuts définitifs : plus rien ne peut changer, l'élément n'est plus
+/// relu (sinon chaque synchronisation relirait tout l'historique).
+const _finishedGuestStatuses = {
+  'picked_up',
+  'completed',
+  'cancelled',
+  'expired',
+  'rejected',
+  'unavailable',
+};
+
+/// Relit sur le serveur l'état des publications et réservations faites sans
+/// compte sur cet appareil (aussi lancé à chaque synchronisation, pour
+/// prévenir l'invité d'une confirmation ou d'une annulation). Silencieux
+/// hors ligne : les copies locales restent affichées.
+Future<void> refreshGuestItems(Dio dio, LocalStore store) async {
+  for (final offer in await store.readGuestItems('offers')) {
+    if (_finishedGuestStatuses.contains(offer['status'])) continue;
+    await _refreshGuestItem(
+      dio,
+      store,
+      'offers',
+      offer,
+      ApiEndpoints.offer(offer['id']! as int),
+    );
+  }
+  for (final reservation in await store.readGuestItems('reservations')) {
+    if (_finishedGuestStatuses.contains(reservation['status'])) continue;
+    await _refreshGuestItem(
+      dio,
+      store,
+      'reservations',
+      reservation,
+      ApiEndpoints.guestReservation(reservation['id']! as int),
+    );
+  }
+}
+
+Future<void> _refreshGuestItem(
+  Dio dio,
+  LocalStore store,
+  String kind,
+  Json item,
+  String path,
+) async {
+  try {
+    final response = await dio.get<Map<String, dynamic>>(
+      path,
+      options: Options(headers: {'X-Guest-Token': item['guest_token']}),
+    );
+    // Champs propres à l'appareil (jeton, dernier statut signalé) gardés.
+    await store.patchGuestItem(kind, item['id'], {
+      ...response.data!,
+      'guest_token': item['guest_token'],
+    });
+  } on DioException catch (error) {
+    // Offre retirée ou expirée côté serveur : on garde la dernière copie.
+    if (error.response?.statusCode == 404) {
+      await store.patchGuestItem(kind, item['id'], {'status': 'unavailable'});
+    }
+  }
+}

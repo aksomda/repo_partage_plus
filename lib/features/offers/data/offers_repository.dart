@@ -18,6 +18,28 @@ bool isOfferAvailable(Json offer, DateTime now) {
       !DateTime.parse(offer['expiry_date'] as String).isBefore(today);
 }
 
+/// Problème de dates d'une publication, ou null si tout va bien (mêmes
+/// règles que le serveur) : chaque créneau se termine dans le futur, et au
+/// plus tard le jour de la date limite [expiry].
+String? pickupDatesError(
+  Iterable<DateTime> slotEnds,
+  DateTime expiry, {
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  final limit = DateTime(expiry.year, expiry.month, expiry.day + 1);
+  if (!limit.isAfter(at)) return 'La date limite est déjà passée';
+  if (slotEnds.any((end) => !end.isAfter(at))) {
+    return 'Le retrait doit se terminer dans le futur : choisissez une heure '
+        'de fin plus tardive';
+  }
+  if (slotEnds.any((end) => end.isAfter(limit))) {
+    return 'Le retrait doit se terminer au plus tard le jour de la date '
+        'limite : avancez le créneau ou repoussez la date limite';
+  }
+  return null;
+}
+
 /// Offre publiée sans compte : pas de réservation, on appelle le donateur.
 bool isGuestOffer(Json offer) =>
     offer['is_guest'] == 1 || offer['is_guest'] == true;

@@ -8,7 +8,7 @@ import { loadSettings } from '../services/settings.js';
 import { loadStats, USER_SELECT } from './admin.js';
 import { loadProfile } from './auth.js';
 import { MESSAGE_SELECT } from './messages.js';
-import { buildDashboard, buildGlobalImpact } from './impact.js';
+import { buildDashboard, buildGlobalImpact, publicImpact } from './impact.js';
 import { forViewer, RESERVATION_SELECT } from './reservations.js';
 
 export const syncRouter = Router();
@@ -34,13 +34,14 @@ const CATEGORIES_SQL = `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
  * disponibles, copiées sur l'appareil pour chercher et filtrer hors ligne.
  */
 syncRouter.get('/public', async (req, res) => {
-  const [categories, offers] = await Promise.all([
+  const [categories, offers, impact] = await Promise.all([
     query(CATEGORIES_SQL),
     query(`${OFFER_SELECT} WHERE ${OFFER_AVAILABLE} ORDER BY o.expiry_date ASC LIMIT ?`, [
       MAX_OFFERS,
     ]),
+    publicImpact(),
   ]);
-  res.json({ server_time: new Date().toISOString(), categories, offers });
+  res.json({ server_time: new Date().toISOString(), categories, offers, public_impact: impact });
 });
 
 /**
@@ -63,6 +64,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     notifications,
     messages,
     dashboard,
+    platformImpact,
   ] = await Promise.all([
     loadProfile(userId),
     query(
@@ -94,6 +96,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
           MAX_MESSAGES,
         ]),
     buildDashboard(userId),
+    publicImpact(),
   ]);
   // Risque de gaspillage de ses offres en cours (écran « Mes offres » hors ligne).
   const offerInsights = isDonor ? await donorInsights(userId) : [];
@@ -152,6 +155,8 @@ syncRouter.get('/', authenticate, async (req, res) => {
     impact_social: dashboard.impact_social,
     impact_as_of: dashboard.as_of,
     impact_source: dashboard.source,
+    // Compteurs de toute la plateforme, affichés sur l'accueil.
+    public_impact: platformImpact,
     admin,
   });
 });

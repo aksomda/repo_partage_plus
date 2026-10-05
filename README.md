@@ -1,4 +1,6 @@
-# Partage+ (Repas Partage Plus)
+# README.md en français
+
+# Partage+ (Repas Partage Plus) est un projet Flutter destiné au développement de l’application Partage+ afin de répondre au 12ème Objectif de Développement Durable (ODD).
 
 Application anti-gaspillage alimentaire : commerçants, restaurateurs et
 particuliers publient leurs invendus et surplus (don gratuit ou prix réduit),
@@ -157,9 +159,61 @@ fix(T-17): libérer un compte Firebase orphelin lors de l'inscription
 docs(T-10): conventions Git dans le README
 ```
 
-Règles :
+# Règles :
 - Un commit = un changement cohérent ; pas de fichiers sans rapport.
 - Jamais de secret : `server/.env` et les comptes de service Firebase sont
   ignorés par `.gitignore` (voir `server/.env.example` pour les clés attendues).
 - Les versions des dépendances du `pubspec.yaml` sont figées : toute mise à
   jour passe par une pull request vers `dev`.
+
+
+# README.md — English Version
+
+# Partage+ (Repas Partage Plus)
+
+# Partage+ is a Flutter project developed to build the Partage+ application, which contributes to the 12th Sustainable Development Goal (SDG 12).
+
+Partage+ is a **food waste reduction application** that allows retailers, restaurants, and individuals to publish their unsold food and surplus products, either for free or at a reduced price. Beneficiaries and associations can reserve available offers and collect them using a verification code or QR code.
+
+The application measures its environmental and social impact, including **food saved, CO₂ emissions avoided, and meals distributed**, and is designed to operate **offline**.
+
+| Component   | Directory    | Technologies                                                              |
+| ----------- | ------------ | ------------------------------------------------------------------------- |
+| Application | `lib/`       | Flutter (Android, iOS, Web, Windows), Riverpod, go_router, Sembast        |
+| API         | `server/`    | Node.js (Express 5), MySQL                                                |
+| AI          | `functions/` | Firebase Cloud Functions, RodiumAI                                        |
+| Services    | `Firebase`   | Authentication, Firestore (backup copy), Cloud Messaging, Email Extension |
+
+## Quick Start
+
+### Prerequisites
+
+The following tools are required:
+
+* Flutter 3.44
+* Dart 3.12
+* Node.js 22
+* MySQL 8
+* WAMP for local development
+
+### Start the API
+
+See `server/README.md` for detailed API documentation.
+
+```bash
+cd server
+cp .env.example .env
+npm install
+npm run db:migrate
+npm run db:seed          # Demo accounts, password: Demo1234!
+npm run dev              # http://localhost:3000
+```
+
+### Start the Flutter application
+
+Open another terminal at the project root:
+
+```bash
+flutter pub get
+flutter run              # Android emulator: API is accessible at 1
+```

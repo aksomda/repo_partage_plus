@@ -23,8 +23,8 @@ const USERS = [
   ['Boulangerie du Centre', 'commerce@demo.local', 'donor', 'commercant'],
   ['Restaurant Le Partage', 'restaurant@demo.local', 'donor', 'restaurateur'],
   ['Awa Bénéficiaire', 'beneficiaire@demo.local', 'beneficiary', 'particulier'],
-  ['Solidarité Plus', 'association@demo.local', 'association', null],
-  ['Entraide Quartier', 'association2@demo.local', 'association', null],
+  ['Solidarité Plus', 'association@demo.local', 'association', 'association'],
+  ['Entraide Quartier', 'association2@demo.local', 'association', 'association'],
 ];
 
 /** Décale la position de démo d'environ `km` vers le nord-est. */
