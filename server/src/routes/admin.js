@@ -15,7 +15,7 @@ import { OFFER_SELECT } from '../services/offers.js';
 import { loadSettings, saveSettings, settingsSchema } from '../services/settings.js';
 import { email, password } from './auth.js';
 import { buildGlobalImpact } from './impact.js';
-import { forViewer, RESERVATION_SELECT } from './reservations.js';
+import { forViewer, releaseQuantity, RESERVATION_SELECT } from './reservations.js';
 
 export const adminRouter = Router();
 
@@ -311,6 +311,37 @@ adminRouter.post('/users', async (req, res) => {
   res.status(201).json(user);
 });
 
+/**
+ * Compte désactivé : ses réservations en cours (comme bénéficiaire) et
+ * celles faites sur ses offres (il ne pourrait plus les confirmer) sont
+ * annulées, l'autre partie est prévenue. Ses offres sont masquées tant
+ * qu'il est désactivé (voir DONOR_ACTIVE).
+ */
+async function cancelOpenReservations(conn, userId) {
+  const [open] = await conn.query(
+    `${RESERVATION_SELECT}
+     WHERE (r.beneficiary_id = ? OR o.donor_id = ?) AND r.status IN ('pending', 'confirmed')
+     FOR UPDATE`,
+    [userId, userId],
+  );
+  for (const reservation of open) {
+    await conn.query(
+      "UPDATE reservations SET status = 'cancelled', cancelled_at = NOW() WHERE id = ?",
+      [reservation.id],
+    );
+    await releaseQuantity(conn, reservation);
+    const donorSuspended = reservation.donor_id === userId;
+    await notify(conn, donorSuspended ? reservation.beneficiary_id : reservation.donor_id, {
+      type: 'reservation_cancelled',
+      title: 'Réservation annulée',
+      body: donorSuspended
+        ? `L’offre « ${reservation.offer_title} » n’est plus disponible : le compte du donateur a été désactivé.`
+        : `La réservation de « ${reservation.offer_title} » a été annulée : le compte du bénéficiaire a été désactivé.`,
+      data: { reservation_id: reservation.id, offer_id: reservation.offer_id },
+    });
+  }
+}
+
 const statusSchema = z
   .object({ status: z.enum(['active', 'suspended']), reason })
   .refine((data) => data.status === 'active' || data.reason, {
@@ -326,11 +357,14 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
     throw new HttpError(409, 'Impossible de modifier son propre compte');
   }
 
-  const result = await query(
-    'UPDATE users SET status = ?, status_reason = ? WHERE id = ? AND role <> ?',
-    [data.status, data.status === 'active' ? null : data.reason, userId, 'admin'],
-  );
-  if (result.affectedRows === 0) throw notFound('Compte');
+  await transaction(async (conn) => {
+    const [result] = await conn.query(
+      'UPDATE users SET status = ?, status_reason = ? WHERE id = ? AND role <> ?',
+      [data.status, data.status === 'active' ? null : data.reason, userId, 'admin'],
+    );
+    if (result.affectedRows === 0) throw notFound('Compte');
+    if (data.status === 'suspended') await cancelOpenReservations(conn, userId);
+  });
 
   // Désactivé aussi dans Firebase : plus aucune connexion possible.
   const [{ firebase_uid: firebaseUid }] = await query(

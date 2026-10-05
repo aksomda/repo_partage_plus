@@ -64,18 +64,26 @@ export async function query(sql, params = []) {
   return rows;
 }
 
-/** Exécute `fn(conn)` dans une transaction, avec rollback en cas d'erreur. */
+/**
+ * Exécute `fn(conn)` dans une transaction, avec rollback en cas d'erreur.
+ * `conn.afterCommit` reçoit les tâches à lancer seulement après la
+ * validation (envoi des notifications push).
+ */
 export async function transaction(fn) {
   const conn = await pool.getConnection();
+  const afterCommit = [];
+  conn.afterCommit = afterCommit;
   try {
     await conn.beginTransaction();
     const result = await fn(conn);
     await conn.commit();
+    for (const task of afterCommit) task();
     return result;
   } catch (error) {
     await conn.rollback();
     throw error;
   } finally {
+    delete conn.afterCommit;
     conn.release();
   }
 }

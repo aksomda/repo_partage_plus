@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { pool, query, transaction } from '../db/pool.js';
 import { authenticate, signToken } from '../http/auth.js';
 import { HttpError } from '../http/errors.js';
+import {
+  assertLoginAllowed,
+  clearLoginFailures,
+  recordLoginFailure,
+} from '../http/login_attempts.js';
 import { id, latitude, longitude } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
 import { firestoreMirror } from '../services/firestore_mirror.js';
@@ -262,6 +267,35 @@ authRouter.post('/password/reset', async (req, res) => {
   res.status(204).end();
 });
 
+/** Âge minimal d'un compte Firebase orphelin avant sa libération. */
+export const ORPHAN_MIN_AGE_MS = 10 * 60_000;
+
+/**
+ * Inscription bloquée par un compte Firebase sans profil (inscription
+ * interrompue, autre mot de passe) : le compte est libéré pour que
+ * l'application le recrée. Seulement sans aucun compte MySQL sur cette
+ * adresse ni ce compte Firebase, et créé depuis plus de 10 minutes (pas une
+ * inscription en cours). Répond toujours 204 : ne révèle pas si l'adresse
+ * existe. Limité comme la connexion (essais par adresse et par IP).
+ */
+authRouter.post('/release-orphan', async (req, res) => {
+  const data = z.object({ email }).parse(req.body);
+  const key = `orphan:${req.ip}`;
+  assertLoginAllowed(key, data.email);
+  recordLoginFailure(key, data.email);
+
+  const [row] = await query('SELECT id FROM users WHERE email = ?', [data.email]);
+  if (!row) {
+    const released = await firebase.releaseOrphan(data.email, {
+      minAgeMs: ORPHAN_MIN_AGE_MS,
+      hasProfile: async (uid) =>
+        (await query('SELECT 1 FROM users WHERE firebase_uid = ?', [uid])).length > 0,
+    });
+    if (released) console.log('Compte Firebase orphelin libéré pour une nouvelle inscription');
+  }
+  res.status(204).end();
+});
+
 /** Connexion : l'application s'est connectée à Firebase et envoie son jeton. */
 authRouter.post('/firebase', async (req, res) => {
   const data = z.object({ id_token: idToken }).parse(req.body);
@@ -283,6 +317,7 @@ authRouter.post('/firebase', async (req, res) => {
 /** Connexion par mot de passe, pour les comptes de démo créés sans Firebase. */
 authRouter.post('/login', async (req, res) => {
   const data = loginSchema.parse(req.body);
+  assertLoginAllowed(req.ip, data.email);
   const [row] = await query('SELECT * FROM users WHERE email = ?', [data.email]);
 
   if (
@@ -290,8 +325,10 @@ authRouter.post('/login', async (req, res) => {
     !row.password_hash ||
     !(await bcrypt.compare(data.password, row.password_hash))
   ) {
+    recordLoginFailure(req.ip, data.email);
     throw new HttpError(401, 'Email ou mot de passe incorrect');
   }
+  clearLoginFailures(req.ip, data.email);
   assertCanLogin(row);
   await session(res, row.id);
 });

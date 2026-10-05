@@ -1,6 +1,7 @@
 import { transaction } from '../db/pool.js';
 import { firestoreMirror } from './firestore_mirror.js';
 import { purgeFirebaseMails } from './mailer.js';
+import { releaseQuantity } from '../routes/reservations.js';
 import { notify } from './notifications.js';
 
 /** Délai avant le début du créneau à partir duquel on envoie le rappel. */
@@ -10,13 +11,14 @@ const EXPIRY_DAYS = 1;
 
 async function sendPickupReminders(conn) {
   const [rows] = await conn.query(
-    `SELECT r.id, r.beneficiary_id, r.offer_id, r.pickup_code,
-            o.title, o.address, o.pickup_start, o.pickup_end
+    `SELECT r.id, r.beneficiary_id, r.offer_id, r.pickup_code, o.title, o.address,
+            COALESCE(r.slot_start, o.pickup_start) AS pickup_start,
+            COALESCE(r.slot_end, o.pickup_end) AS pickup_end
      FROM reservations r
      JOIN offers o ON o.id = r.offer_id
      WHERE r.status = 'confirmed' AND r.reminder_sent_at IS NULL
-       AND o.pickup_start <= NOW() + INTERVAL ? HOUR
-       AND o.pickup_end > NOW()
+       AND COALESCE(r.slot_start, o.pickup_start) <= NOW() + INTERVAL ? HOUR
+       AND COALESCE(r.slot_end, o.pickup_end) > NOW()
      FOR UPDATE`,
     [REMINDER_HOURS],
   );
@@ -38,6 +40,64 @@ async function sendPickupReminders(conn) {
     ]);
   }
   return rows.length;
+}
+
+/**
+ * Réservation encore en attente à l'approche du créneau : le donateur est
+ * invité à la confirmer (sinon le bénéficiaire ne peut pas retirer).
+ */
+async function sendConfirmReminders(conn) {
+  const [rows] = await conn.query(
+    `SELECT r.id, r.offer_id, o.donor_id, o.title,
+            COALESCE(r.slot_start, o.pickup_start) AS pickup_start
+     FROM reservations r
+     JOIN offers o ON o.id = r.offer_id
+     WHERE r.status = 'pending' AND r.confirm_reminder_sent_at IS NULL
+       AND COALESCE(r.slot_start, o.pickup_start) <= NOW() + INTERVAL ? HOUR
+       AND COALESCE(r.slot_end, o.pickup_end) > NOW()
+     FOR UPDATE`,
+    [REMINDER_HOURS],
+  );
+
+  for (const row of rows) {
+    await notify(conn, row.donor_id, {
+      type: 'confirm_reminder',
+      title: 'Réservation à confirmer',
+      body: `Une réservation de « ${row.title} » attend votre confirmation : le retrait commence bientôt.`,
+      data: { reservation_id: row.id, offer_id: row.offer_id },
+    });
+    await conn.query('UPDATE reservations SET confirm_reminder_sent_at = NOW() WHERE id = ?', [
+      row.id,
+    ]);
+  }
+  return rows.length;
+}
+
+/**
+ * Créneau choisi terminé sans retrait (l'offre a d'autres créneaux) :
+ * réservation annulée, quantité rendue, bénéficiaire prévenu.
+ */
+async function expireMissedSlots(conn) {
+  const [missed] = await conn.query(
+    `SELECT r.id, r.beneficiary_id, r.offer_id, r.quantity, o.title
+     FROM reservations r JOIN offers o ON o.id = r.offer_id
+     WHERE r.status IN ('pending', 'confirmed') AND r.slot_end IS NOT NULL AND r.slot_end <= NOW()
+     FOR UPDATE`,
+  );
+  for (const reservation of missed) {
+    await conn.query(
+      "UPDATE reservations SET status = 'cancelled', cancelled_at = NOW() WHERE id = ?",
+      [reservation.id],
+    );
+    await releaseQuantity(conn, reservation);
+    await notify(conn, reservation.beneficiary_id, {
+      type: 'reservation_cancelled',
+      title: 'Créneau manqué',
+      body: `Le créneau choisi pour « ${reservation.title} » est passé : la réservation est annulée.`,
+      data: { reservation_id: reservation.id, offer_id: reservation.offer_id },
+    });
+  }
+  return missed.length;
 }
 
 async function sendExpiryAlerts(conn) {
@@ -80,18 +140,34 @@ async function sendExpiryAlerts(conn) {
   return offers.length;
 }
 
-async function expireOffers(conn) {
-  const expiredCondition = `
-    status IN ('pending', 'published', 'reserved')
-    AND (expiry_date < CURDATE() OR pickup_end <= NOW())`;
+/** Offre arrivée à sa DLC ou à la fin du créneau de retrait ; [o] : alias de la table. */
+const expiredCondition = (o = 'offers') => `
+  ${o}.status IN ('pending', 'published', 'reserved')
+  AND (${o}.expiry_date < CURDATE() OR ${o}.pickup_end <= NOW())`;
 
+async function expireOffers(conn) {
+  const [cancelled] = await conn.query(
+    `SELECT r.id, r.beneficiary_id, r.offer_id, o.title
+     FROM reservations r JOIN offers o ON o.id = r.offer_id
+     WHERE r.status IN ('pending', 'confirmed') AND ${expiredCondition('o')}
+     FOR UPDATE`,
+  );
   await conn.query(
     `UPDATE reservations SET status = 'cancelled', cancelled_at = NOW()
      WHERE status IN ('pending', 'confirmed')
-       AND offer_id IN (SELECT id FROM (SELECT id FROM offers WHERE ${expiredCondition}) AS expired)`,
+       AND offer_id IN (SELECT id FROM (SELECT id FROM offers WHERE ${expiredCondition()}) AS expired)`,
   );
+  // Le bénéficiaire apprend que sa réservation n'est plus valable.
+  for (const reservation of cancelled) {
+    await notify(conn, reservation.beneficiary_id, {
+      type: 'reservation_cancelled',
+      title: 'Réservation expirée',
+      body: `« ${reservation.title} » n’a pas été retiré à temps : l’offre a expiré et la réservation est annulée.`,
+      data: { reservation_id: reservation.id, offer_id: reservation.offer_id },
+    });
+  }
   const [result] = await conn.query(
-    `UPDATE offers SET status = 'expired' WHERE ${expiredCondition}`,
+    `UPDATE offers SET status = 'expired' WHERE ${expiredCondition()}`,
   );
   return result.affectedRows;
 }
@@ -112,6 +188,8 @@ export async function runScheduledJobs() {
     await purgeIdempotencyKeys(conn);
     return {
       pickup_reminders: await sendPickupReminders(conn),
+      confirm_reminders: await sendConfirmReminders(conn),
+      missed_slots: await expireMissedSlots(conn),
       expiry_alerts: await sendExpiryAlerts(conn),
       expired_offers: await expireOffers(conn),
     };

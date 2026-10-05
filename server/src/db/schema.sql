@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS users (
   phone VARCHAR(30) NULL,
   latitude DECIMAL(9, 6) NULL,
   longitude DECIMAL(9, 6) NULL,
+  -- Préférences du compte (recommandations, notifications, favoris),
+  -- retrouvées sur tous ses appareils.
+  preferences JSON NULL,
   -- pending : inscrit, en attente du code reçu par e-mail.
   status ENUM('pending', 'active', 'suspended') NOT NULL DEFAULT 'active',
   status_reason VARCHAR(255) NULL,
@@ -168,11 +171,17 @@ CREATE TABLE IF NOT EXISTS reservations (
   amount DECIMAL(10, 2) NOT NULL DEFAULT 0,
   payment_reference VARCHAR(64) NULL,
   status ENUM('pending', 'confirmed', 'picked_up', 'cancelled') NOT NULL DEFAULT 'pending',
+  -- Créneau choisi (offre à plusieurs créneaux) ; NULL : toute la période.
+  slot_id INT UNSIGNED NULL,
+  slot_start DATETIME NULL,
+  slot_end DATETIME NULL,
   pickup_code CHAR(6) NOT NULL,
   confirmed_at DATETIME NULL,
   picked_up_at DATETIME NULL,
   cancelled_at DATETIME NULL,
   reminder_sent_at DATETIME NULL,
+  -- Rappel au donateur d'une réservation pas encore confirmée.
+  confirm_reminder_sent_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_reservations_beneficiary (beneficiary_id, status),
@@ -274,4 +283,28 @@ CREATE TABLE IF NOT EXISTS message_photos (
   data MEDIUMBLOB NOT NULL,
   PRIMARY KEY (message_id, position),
   CONSTRAINT fk_message_photos_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Jetons Firebase Cloud Messaging des appareils connectés : une notification
+-- enregistrée est aussi envoyée en push (application fermée comprise).
+CREATE TABLE IF NOT EXISTS device_tokens (
+  token VARCHAR(255) NOT NULL PRIMARY KEY,
+  user_id INT UNSIGNED NOT NULL,
+  platform VARCHAR(20) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_device_tokens_user (user_id),
+  CONSTRAINT fk_device_tokens_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Créneaux de retrait d'une offre (au moins un). offers.pickup_start et
+-- pickup_end gardent le premier début et la dernière fin : disponibilité et
+-- expiration de l'offre restent calculées sur toute la période.
+CREATE TABLE IF NOT EXISTS offer_slots (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  offer_id INT UNSIGNED NOT NULL,
+  start_at DATETIME NOT NULL,
+  end_at DATETIME NOT NULL,
+  KEY idx_offer_slots_offer (offer_id, start_at),
+  CONSTRAINT fk_offer_slots_offer FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;

@@ -4,10 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/offline/sync_service.dart';
-import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
-import 'package:repo_partage_plus/core/widgets/dev_menu.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/logout_button.dart';
 
@@ -47,7 +46,7 @@ class AdminShell extends StatelessWidget {
             automaticallyImplyLeading: !wide,
             actions: actions,
           ),
-          drawer: wide ? null : DevMenu(currentLocation: location),
+          drawer: wide ? null : AppMenu(currentLocation: location),
           body: wide
               ? Row(
                   children: [
@@ -68,21 +67,6 @@ class AdminSideNav extends StatelessWidget {
 
   final String current;
 
-  static const items = [
-    (Icons.dashboard_outlined, 'Tableau de bord', AppRoutes.adminDashboard),
-    (Icons.inventory_2_outlined, 'Offres', AppRoutes.adminOffers),
-    (Icons.people_outline, 'Utilisateurs', AppRoutes.adminAccounts),
-    (Icons.event_note_outlined, 'Réservations', AppRoutes.adminReservations),
-    (Icons.eco_outlined, 'Impact', AppRoutes.adminImpact),
-    (Icons.notifications_none, 'Notifications', AppRoutes.notifications),
-    (
-      Icons.admin_panel_settings_outlined,
-      'Administration',
-      AppRoutes.adminManage,
-    ),
-    (Icons.settings_outlined, 'Paramètres', AppRoutes.adminSettings),
-  ];
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -99,12 +83,13 @@ class AdminSideNav extends StatelessWidget {
                   padding: EdgeInsets.fromLTRB(8, 0, 8, 20),
                   child: BrandLogo(size: 24, onDark: true, showTagline: false),
                 ),
-                for (final (icon, label, route) in items)
+                for (final item in adminMenuItems)
                   _NavItem(
-                    icon: icon,
-                    label: label,
-                    selected: route == current,
-                    onTap: () => context.go(route),
+                    icon: item.icon,
+                    label: item.title,
+                    description: item.description,
+                    selected: item.location == current,
+                    onTap: () => context.go(item.location),
                   ),
               ],
             ),
@@ -125,44 +110,52 @@ class _NavItem extends StatelessWidget {
   const _NavItem({
     required this.icon,
     required this.label,
+    required this.description,
     required this.selected,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
+  final String description;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: selected
-            ? Colors.white.withValues(alpha: 0.16)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
+    return Tooltip(
+      message: description,
+      waitDuration: menuTooltipDelay,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Material(
+          color: selected
+              ? Colors.white.withValues(alpha: 0.16)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          onTap: selected ? null : onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(icon, size: 20, color: Colors.white),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    label,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: selected ? null : onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(icon, size: 20, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

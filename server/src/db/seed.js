@@ -144,6 +144,11 @@ export async function seed({ fresh = false } = {}) {
       );
     }
 
+    // Un créneau par offre : toute la période de retrait.
+    await conn.query(`INSERT INTO offer_slots (offer_id, start_at, end_at)
+      SELECT o.id, o.pickup_start, o.pickup_end FROM offers o
+      WHERE NOT EXISTS (SELECT 1 FROM offer_slots s WHERE s.offer_id = o.id)`);
+
     // Une offre payante (paiement Mobile Money hors application).
     await conn.query(
       `UPDATE offers SET price = 250, payment_info = 'Orange Money +226 70 00 00 00'

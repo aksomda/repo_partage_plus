@@ -14,9 +14,12 @@ abstract final class ApiEndpoints {
   static const resendCode = '/auth/resend-code';
   static const forgotPassword = '/auth/password/forgot';
   static const resetPassword = '/auth/password/reset';
+  static const releaseOrphan = '/auth/release-orphan';
   static const me = '/auth/me';
   static const updateMe = '/users/me';
   static const changePassword = '/users/me/password';
+  static const devices = '/users/me/devices';
+  static const donorAdvice = '/recommendations/advice';
 
   // Référentiels
   static const categories = '/categories';
@@ -29,6 +32,7 @@ abstract final class ApiEndpoints {
   static const expiringOffers = '/offers/expiring-soon';
   static const myOffers = '/offers/mine';
   static String offer(int id) => '/offers/$id';
+  static String offerSlots(int id) => '/offers/$id/slots';
 
   // Réservations et retrait
   static const reservations = '/reservations';

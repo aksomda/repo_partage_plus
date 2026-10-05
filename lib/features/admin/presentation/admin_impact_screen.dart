@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -8,6 +9,8 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/admin/data/admin_repository.dart';
 import 'package:repo_partage_plus/features/admin/presentation/widgets/admin_shell.dart';
+import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/impact/domain/impact_csv.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
 /// Impact de toute la plateforme : totaux, évolution sur 12 mois et
@@ -21,6 +24,7 @@ class AdminImpactScreen extends ConsumerWidget {
     final impact = asJson(data?['impact']) ?? const {};
     final months = asJsonList(data?['monthly']);
     final categories = asJsonList(data?['by_category']);
+    final social = asJson(data?['social']) ?? const {};
 
     return AdminShell(
       title: 'Impact de la plateforme',
@@ -48,6 +52,11 @@ class AdminImpactScreen extends ConsumerWidget {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
+                      ),
+                      IconButton(
+                        tooltip: 'Copier en CSV (Excel, Sheets)',
+                        icon: const Icon(Icons.table_view_outlined),
+                        onPressed: () => _copyCsv(context, data),
                       ),
                       OutlinedButton.icon(
                         onPressed: () => context.push(AppRoutes.adminFactors),
@@ -96,6 +105,29 @@ class AdminImpactScreen extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  if (social.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Indicateurs sociaux',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        for (final (key, icon) in _socialIcons)
+                          if (social[key] != null)
+                            _Stat(
+                              icon,
+                              adminSocialLabels[key]!,
+                              key.endsWith('_share') || key.endsWith('_rate')
+                                  ? '${formatNumber(social[key] as num?)} %'
+                                  : formatNumber(social[key] as num?),
+                            ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   _Section(
                     title: 'Nourriture sauvée par mois (kg)',
@@ -110,6 +142,42 @@ class AdminImpactScreen extends ConsumerWidget {
               ),
       ),
     );
+  }
+}
+
+/// Libellés des indicateurs sociaux de la plateforme.
+const adminSocialLabels = {
+  'people_helped': 'Personnes aidées',
+  'associations_supported': 'Associations soutenues',
+  'active_donors': 'Donateurs actifs',
+  'offers_shared': 'Offres partagées',
+  'free_share': 'Retraits gratuits',
+  'completion_rate': 'Offres écoulées',
+};
+
+const _socialIcons = [
+  ('people_helped', Icons.volunteer_activism_outlined),
+  ('associations_supported', Icons.groups_outlined),
+  ('active_donors', Icons.storefront_outlined),
+  ('offers_shared', Icons.inventory_2_outlined),
+  ('free_share', Icons.card_giftcard_outlined),
+  ('completion_rate', Icons.task_alt),
+];
+
+/// Copie le tableau d'impact au format CSV dans le presse-papiers.
+Future<void> _copyCsv(BuildContext context, Json data) async {
+  final csv = impactCsv(
+    title:
+        'Impact de la plateforme Partage+ (${formatAdminDate(data['as_of'])})',
+    impact: asJson(data['impact']) ?? const {},
+    social: asJson(data['social']) ?? const {},
+    monthly: asJsonList(data['monthly']),
+    byCategory: asJsonList(data['by_category']),
+    socialLabels: adminSocialLabels,
+  );
+  await Clipboard.setData(ClipboardData(text: csv));
+  if (context.mounted) {
+    showMessage(context, 'Tableau copié : collez-le dans Excel ou Sheets');
   }
 }
 

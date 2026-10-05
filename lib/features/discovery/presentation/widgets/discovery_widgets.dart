@@ -9,6 +9,9 @@ import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/core/widgets/text_prompt_dialog.dart';
+import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
@@ -47,11 +50,13 @@ class AppBottomNav extends ConsumerWidget {
           icon: Icon(Icons.home_outlined),
           selectedIcon: Icon(Icons.home),
           label: 'Accueil',
+          tooltip: 'Les offres disponibles autour de votre point de départ',
         ),
         const NavigationDestination(
           icon: Icon(Icons.map_outlined),
           selectedIcon: Icon(Icons.map),
           label: 'Carte',
+          tooltip: 'Les offres à proximité, sur la carte',
         ),
         NavigationDestination(
           icon: Container(
@@ -63,16 +68,21 @@ class AppBottomNav extends ConsumerWidget {
             child: const Icon(Icons.add, color: Colors.white),
           ),
           label: 'Publier',
+          tooltip: 'Donner ou vendre à prix réduit vos invendus et surplus',
         ),
         const NavigationDestination(
           icon: Icon(Icons.event_note_outlined),
           selectedIcon: Icon(Icons.event_note),
           label: 'Réservations',
+          tooltip: 'Vos réservations et leur code de retrait',
         ),
         NavigationDestination(
           icon: const Icon(Icons.person_outline),
           selectedIcon: const Icon(Icons.person),
           label: loggedIn ? 'Profil' : 'Connexion',
+          tooltip: loggedIn
+              ? 'Vos informations, votre mot de passe et vos préférences'
+              : 'Accéder à votre compte ou en créer un',
         ),
       ],
     );
@@ -203,6 +213,7 @@ class OfferFilters {
     this.categoryId,
     this.radiusKm = 10,
     this.owner = OfferOwner.all,
+    this.favoritesOnly = false,
   });
 
   final String text;
@@ -210,17 +221,25 @@ class OfferFilters {
   final double radiusKm;
   final OfferOwner owner;
 
+  /// Seulement les offres mises en favori.
+  final bool favoritesOnly;
+
+  /// Critères qui méritent d'être enregistrés comme recherche favorite.
+  bool get isSearch => text.trim().isNotEmpty || categoryId != null;
+
   OfferFilters copyWith({
     String? text,
     int? Function()? categoryId,
     double? radiusKm,
     OfferOwner? owner,
+    bool? favoritesOnly,
   }) {
     return OfferFilters(
       text: text ?? this.text,
       categoryId: categoryId == null ? this.categoryId : categoryId(),
       radiusKm: radiusKm ?? this.radiusKm,
       owner: owner ?? this.owner,
+      favoritesOnly: favoritesOnly ?? this.favoritesOnly,
     );
   }
 }
@@ -234,7 +253,18 @@ List<Json> filterOffersByOwner({
   required List<Json> mine,
   required Place? origin,
   required OfferFilters filters,
+  Set<int> favoriteIds = const {},
 }) {
+  if (filters.favoritesOnly) {
+    available = [
+      for (final offer in available)
+        if (favoriteIds.contains(offer['id'])) offer,
+    ];
+    mine = [
+      for (final offer in mine)
+        if (favoriteIds.contains(offer['id'])) offer,
+    ];
+  }
   switch (filters.owner) {
     case OfferOwner.all:
       return filterOffers(available, origin, filters);
@@ -314,11 +344,13 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
       if (loggedIn) ...ref.watch(myOffersProvider),
       ...?ref.watch(guestOffersProvider).value,
     ];
+    final favorites = ref.watch(favoritesProvider);
     final offers = filterOffersByOwner(
       available: ref.watch(availableOffersProvider),
       mine: mine,
       origin: origin,
       filters: _filters,
+      favoriteIds: favorites.offerIds,
     );
     final showMine = _filters.owner == OfferOwner.mine;
     final syncing = ref.watch(syncControllerProvider).syncing;
@@ -382,6 +414,17 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
               ),
             ),
           ),
+          if (!favorites.isEmpty || _filters.isSearch)
+            SliverToBoxAdapter(
+              child: _FavoritesBar(
+                favorites: favorites,
+                filters: _filters,
+                onApply: (filters) {
+                  _search.text = filters.text;
+                  setState(() => _filters = filters);
+                },
+              ),
+            ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
@@ -533,6 +576,128 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
         selected: selected,
         labelStyle: TextStyle(color: selected ? Colors.white : AppColors.text),
         onSelected: (_) => setState(() => _filters = apply()),
+      ),
+    );
+  }
+}
+
+/// Favoris (sans compte aussi) : filtre « offres favorites », recherches
+/// enregistrées à relancer d'un geste, et enregistrement de la recherche en
+/// cours. Appui long sur une recherche : la supprimer.
+class _FavoritesBar extends ConsumerWidget {
+  const _FavoritesBar({
+    required this.favorites,
+    required this.filters,
+    required this.onApply,
+  });
+
+  final Favorites favorites;
+  final OfferFilters filters;
+  final ValueChanged<OfferFilters> onApply;
+
+  Future<void> _save(BuildContext context, WidgetRef ref) async {
+    final categories = ref.read(categoriesProvider);
+    final category = categories
+        .where((c) => c['id'] == filters.categoryId)
+        .firstOrNull;
+    final suggested = [
+      if (filters.text.trim().isNotEmpty) filters.text.trim(),
+      if (category != null) category['name'],
+    ].join(' · ');
+    final name = await _askName(context, suggested);
+    if (name == null) return;
+    await ref
+        .read(favoritesProvider.notifier)
+        .saveSearch(
+          SavedSearch(
+            name: name,
+            text: filters.text.trim(),
+            categoryId: filters.categoryId,
+            radiusKm: filters.radiusKm,
+          ),
+        );
+    if (context.mounted) {
+      showMessage(context, 'Recherche « $name » enregistrée');
+    }
+  }
+
+  Future<String?> _askName(BuildContext context, String suggested) {
+    return showTextPrompt(
+      context,
+      title: 'Enregistrer la recherche',
+      action: 'Enregistrer',
+      hint: 'Nom (ex. : Pain du soir)',
+      initial: suggested,
+      maxLength: 40,
+      emptyMessage: 'Donnez un nom à la recherche',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = favorites.offerIds.length;
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: [
+          if (count > 0 || filters.favoritesOnly)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: FilterChip(
+                avatar: Icon(
+                  filters.favoritesOnly
+                      ? Icons.favorite
+                      : Icons.favorite_border,
+                  size: 18,
+                  color: AppColors.danger,
+                ),
+                label: Text('Favoris ($count)'),
+                selected: filters.favoritesOnly,
+                showCheckmark: false,
+                onSelected: (value) =>
+                    onApply(filters.copyWith(favoritesOnly: value)),
+              ),
+            ),
+          for (final search in favorites.searches)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: GestureDetector(
+                onLongPress: () async {
+                  await ref
+                      .read(favoritesProvider.notifier)
+                      .removeSearch(search.name);
+                  if (context.mounted) {
+                    showMessage(
+                      context,
+                      'Recherche « ${search.name} » supprimée',
+                    );
+                  }
+                },
+                child: ActionChip(
+                  avatar: const Icon(Icons.bookmark_outline, size: 18),
+                  label: Text(search.name),
+                  tooltip: 'Relancer (appui long : supprimer)',
+                  onPressed: () => onApply(
+                    filters.copyWith(
+                      text: search.text,
+                      categoryId: () => search.categoryId,
+                      radiusKm: searchRadii.contains(search.radiusKm)
+                          ? search.radiusKm
+                          : filters.radiusKm,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (filters.isSearch)
+            ActionChip(
+              avatar: const Icon(Icons.bookmark_add_outlined, size: 18),
+              label: const Text('Enregistrer la recherche'),
+              onPressed: () => _save(context, ref),
+            ),
+        ],
       ),
     );
   }

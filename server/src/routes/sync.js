@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
 import { OFFER_AVAILABLE, OFFER_SELECT, OWN_OFFER_SELECT } from '../services/offers.js';
+import { donorInsights } from '../services/insights.js';
 import { loadSettings } from '../services/settings.js';
 import { loadStats, USER_SELECT } from './admin.js';
 import { loadProfile } from './auth.js';
@@ -94,6 +95,8 @@ syncRouter.get('/', authenticate, async (req, res) => {
         ]),
     buildDashboard(userId),
   ]);
+  // Risque de gaspillage de ses offres en cours (écran « Mes offres » hors ligne).
+  const offerInsights = isDonor ? await donorInsights(userId) : [];
 
   const admin = isAdmin
     ? {
@@ -138,6 +141,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     reservations,
     received: received.map((row) => forViewer(row, req.user)),
     my_offers: myOffers,
+    offer_insights: offerInsights,
     notifications,
     messages,
     // Compteurs, évolution sur 12 mois, catégories et indicateurs sociaux :

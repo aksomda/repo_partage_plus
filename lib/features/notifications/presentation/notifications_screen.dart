@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
-import 'package:repo_partage_plus/core/widgets/dev_menu.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/features/admin/presentation/widgets/admin_shell.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
@@ -24,7 +24,7 @@ class NotificationsScreen extends ConsumerWidget {
     if (!ref.watch(isLoggedInProvider)) {
       return Scaffold(
         appBar: AppBar(title: const Text('Notifications')),
-        drawer: DevMenu(currentLocation: location),
+        drawer: AppMenu(currentLocation: location),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
@@ -65,7 +65,7 @@ class NotificationsScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
-      drawer: DevMenu(currentLocation: location),
+      drawer: AppMenu(currentLocation: location),
       body: const ChatView(),
     );
   }

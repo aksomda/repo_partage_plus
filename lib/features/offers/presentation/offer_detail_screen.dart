@@ -14,6 +14,7 @@ import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 import 'package:repo_partage_plus/features/recommendations/data/preferences.dart';
@@ -32,7 +33,10 @@ class OfferDetailScreen extends ConsumerWidget {
         : ref.watch(offerDetailProvider(id));
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Détail de l'offre")),
+      appBar: AppBar(
+        title: const Text("Détail de l'offre"),
+        actions: [if (id != null) _FavoriteButton(offerId: id)],
+      ),
       body: offer.when(
         data: (data) => _Details(offer: data),
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -167,8 +171,18 @@ class _DetailsState extends ConsumerState<_Details> {
                       color: AppColors.accent,
                     ),
                     _Line(Icons.category_outlined, '${offer['category_name']}'),
-                    const _Section('Créneau de retrait'),
-                    _Line(Icons.schedule, formatPickup(offer)),
+                    if (offerSlots(offer) case final slots
+                        when slots.length > 1) ...[
+                      _Section('Créneaux de retrait (${slots.length})'),
+                      for (final slot in slots)
+                        _Line(
+                          Icons.schedule,
+                          formatPeriod(slot.start, slot.end),
+                        ),
+                    ] else ...[
+                      const _Section('Créneau de retrait'),
+                      _Line(Icons.schedule, formatPickup(offer)),
+                    ],
                     _Line(Icons.location_on_outlined, '${offer['address']}'),
                     const SizedBox(height: 8),
                     OsmAndButton(
@@ -295,6 +309,29 @@ class _Section extends StatelessWidget {
         title,
         style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
       ),
+    );
+  }
+}
+
+/// Ajoute ou retire l'offre des favoris (sans compte aussi).
+class _FavoriteButton extends ConsumerWidget {
+  const _FavoriteButton({required this.offerId});
+
+  final int offerId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final favorite = ref.watch(
+      favoritesProvider.select((f) => f.offerIds.contains(offerId)),
+    );
+    return IconButton(
+      tooltip: favorite ? 'Retirer des favoris' : 'Ajouter aux favoris',
+      icon: Icon(
+        favorite ? Icons.favorite : Icons.favorite_border,
+        color: favorite ? AppColors.danger : null,
+      ),
+      onPressed: () =>
+          ref.read(favoritesProvider.notifier).toggleOffer(offerId),
     );
   }
 }

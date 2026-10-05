@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
@@ -8,6 +9,7 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/impact/data/impact_repository.dart';
+import 'package:repo_partage_plus/features/impact/domain/impact_csv.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
 /// Tableau de bord « Mon impact » : compteurs, indicateurs sociaux,
@@ -44,12 +46,46 @@ class _ImpactScreenState extends ConsumerState<ImpactScreen> {
     }
   }
 
+  /// Copie le tableau d'impact au format CSV dans le presse-papiers.
+  Future<void> _copyCsv() async {
+    final csv = impactCsv(
+      title: 'Mon impact sur Partage+',
+      impact: ref.read(myImpactProvider) ?? const {},
+      social: ref.read(myImpactSocialProvider) ?? const {},
+      monthly: ref.read(myImpactMonthlyProvider),
+      byCategory: ref.read(myImpactByCategoryProvider),
+      socialLabels: const {
+        'offers_shared': 'Offres partagées',
+        'pickups_given': 'Retraits donnés',
+        'people_helped': 'Personnes aidées',
+        'associations_supported': 'Associations soutenues',
+        'pickups_received': 'Retraits reçus',
+        'donors_met': 'Donateurs rencontrés',
+        'free_received': 'Dons gratuits reçus',
+      },
+    );
+    await Clipboard.setData(ClipboardData(text: csv));
+    if (mounted) {
+      showMessage(context, 'Tableau copié : collez-le dans Excel ou Sheets');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final impact = ref.watch(myImpactProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mon impact')),
+      appBar: AppBar(
+        title: const Text('Mon impact'),
+        actions: [
+          if (impact != null)
+            IconButton(
+              tooltip: 'Copier en CSV (Excel, Sheets)',
+              icon: const Icon(Icons.table_view_outlined),
+              onPressed: _copyCsv,
+            ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: impact == null
@@ -195,6 +231,7 @@ class _Counters extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pickups = impact['pickups'] as num? ?? 0;
+    final estimated = impact['estimated_pickups'] as num? ?? 0;
     return _CardGrid(
       children: [
         _StatCard(
@@ -209,6 +246,10 @@ class _Counters extends StatelessWidget {
           icon: Icons.delete_outline,
           label: 'Gaspillage évité',
           value: '${formatNumber(impact['food_kg'] as num?, decimals: 1)} kg',
+          // Poids non indiqué par le publieur : estimé d'après l'unité.
+          detail: estimated > 0
+              ? 'dont ${formatNumber(estimated)} retrait${estimated > 1 ? 's' : ''} estimé${estimated > 1 ? 's' : ''}'
+              : null,
         ),
         _StatCard(
           icon: Icons.eco_outlined,

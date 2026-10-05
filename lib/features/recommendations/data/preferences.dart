@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/features/auth/data/profile_repository.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
 /// Préférences de recommandation, gardées sur l'appareil.
@@ -72,21 +75,53 @@ class RecoPreferences {
 class RecoPreferencesController extends Notifier<RecoPreferences> {
   static const _key = 'reco_preferences';
 
+  /// Préférences enregistrées sur cet appareil.
+  var _savedLocally = false;
+
   @override
   RecoPreferences build() {
     Future.microtask(() async {
       final saved = await ref
           .read(localStoreProvider)
           .readSetting<Object?>(_key);
-      if (saved != null) state = RecoPreferences.fromMap(saved);
+      if (saved != null) {
+        _savedLocally = true;
+        state = RecoPreferences.fromMap(saved);
+      } else {
+        _adoptAccount(ref.read(accountPreferencesProvider));
+      }
     });
+    // Nouvel appareil ou reconnexion : préférences du compte (serveur).
+    ref.listen<Json>(accountPreferencesProvider, (_, next) {
+      if (!_savedLocally) _adoptAccount(next);
+    });
+    ref.onDispose(() => _upload?.cancel());
     return const RecoPreferences();
   }
 
+  void _adoptAccount(Json account) {
+    final reco = account['reco'];
+    if (reco is Map) state = RecoPreferences.fromMap(reco);
+  }
+
+  /// Enregistrée sur l'appareil et, avec un compte, sur le serveur.
   Future<void> update(RecoPreferences preferences) async {
     state = preferences;
+    _savedLocally = true;
     await ref.read(localStoreProvider).saveSetting(_key, preferences.toMap());
+    if (ref.read(authTokenProvider) == null) return;
+    // Plusieurs choix d'affilée : un seul envoi, après le dernier.
+    _upload?.cancel();
+    _upload = Timer(uploadDelay, () {
+      ref.read(profileRepositoryProvider).savePreferences({
+        'reco': state.toMap(),
+      });
+    });
   }
+
+  /// Délai avant l'envoi au serveur des préférences modifiées.
+  static const uploadDelay = Duration(seconds: 2);
+  Timer? _upload;
 }
 
 final recoPreferencesProvider =

@@ -1,140 +1,165 @@
-@'
-name: repo_partage_plus
-description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+# Partage+ (Repas Partage Plus)
 
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+Application anti-gaspillage alimentaire : commerçants, restaurateurs et
+particuliers publient leurs invendus et surplus (don gratuit ou prix réduit),
+bénéficiaires et associations les réservent puis les retirent avec un code ou
+un QR code. L'application mesure l'impact (nourriture sauvée, CO₂ évité, repas)
+et fonctionne hors ligne.
 
-environment:
-  sdk: ^3.12.2
+| Partie | Dossier | Technologies |
+|---|---|---|
+| Application | `lib/` | Flutter (Android, iOS, web, Windows), Riverpod, go_router, sembast |
+| API | `server/` | Node.js (Express 5), MySQL |
+| IA | `functions/` | Cloud Function Firebase, RodiumAI |
+| Services | Firebase | Authentication, Firestore (copie de secours), Cloud Messaging, extension e-mail |
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
-dependencies:
-  flutter:
-    sdk: flutter
+## Démarrage rapide
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
+Prérequis : Flutter 3.44 (Dart 3.12), Node.js 22, MySQL 8 (WAMP en local).
 
-  # Versions figees (sans ^) : toute modification passe par une PR vers dev.
+```bash
+# API : voir server/README.md pour le détail
+cd server
+cp .env.example .env
+npm install
+npm run db:migrate
+npm run db:seed          # comptes de démo, mot de passe : Demo1234!
+npm run dev              # http://localhost:3000
 
-  # Carte
-  flutter_map: 8.3.2
-  latlong2: 0.10.1
+# Application (autre terminal, à la racine)
+flutter pub get
+flutter run              # émulateur Android : l'API est vue en 10.0.2.2:3000
+```
 
-  # Geolocalisation
-  geolocator: 14.0.3
+Téléphone branché (USB ou ADB sans fil) : lancer `adb reverse tcp:3000 tcp:3000`
+puis la configuration « Téléphone (USB, API locale) » de `.vscode/launch.json`.
+Autre serveur : `flutter run --dart-define=API_BASE_URL=https://…/api`.
 
-  # HTTP
-  dio: 5.11.1
+## Vérifier avant de proposer une modification
 
-  # Gestion d'etat
-  flutter_riverpod: 3.4.3
+Ce sont les contrôles de la CI (`.github/workflows/ci.yml`) :
 
-  # Navigation
-  go_router: 17.5.0
+```bash
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+cd server && npm test        # base repas_partage_test recréée à chaque fois
+cd functions && npm test
+```
 
-  # Notifications (rappel de retrait, DLC proche)
-  flutter_local_notifications: 22.3.1
-  timezone: 0.11.1
+## Documentation
 
-  # Mode hors ligne : stockage local (mobile + web), detection du reseau,
-  # identifiants des actions en attente.
-  sembast: 3.8.11
-  sembast_web: 2.4.6
-  path_provider: 2.1.6
-  connectivity_plus: 7.3.1
-  uuid: 4.6.0
+| Sujet | Fichier |
+|---|---|
+| API, routes, comptes de démo | [server/README.md](server/README.md) |
+| Firebase (Auth, Firestore, e-mails) | [docs/FIREBASE.md](docs/FIREBASE.md) |
+| Mode hors ligne | [docs/HORS_LIGNE.md](docs/HORS_LIGNE.md) |
+| Recommandations et IA | [docs/IA.md](docs/IA.md) |
+| Mise en ligne | [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md) |
+| Scénario de démonstration | [docs/DEMO.md](docs/DEMO.md) |
 
-  # Authentification (mot de passe gere par Firebase, profil dans MySQL)
-  firebase_core: 4.15.0
-  firebase_auth: ^6.7.0
+## Architecture
 
-  # Itineraire vers le lieu de retrait dans OsmAnd (cartes hors ligne)
-  android_intent_plus: 6.1.0
-  url_launcher: 6.3.2
-  rodiumai: ^0.1.1
+```text
+lib/
+  main.dart, app.dart        démarrage, thème, routeur
+  core/                      code partagé par tous les modules
+    network/                 client HTTP, adresses de l'API
+    offline/                 file d'actions, synchronisation, données locales
+    router/                  routes (app_routes.dart) et navigation
+    storage/                 base locale (sembast)
+    theme/, widgets/         thème et composants communs
+  features/<module>/         un dossier par fonctionnalité
+    data/                    dépôts (API, base locale) et providers Riverpod
+    domain/                  règles métier sans interface (calculs, formats)
+    presentation/            écrans, et widgets/ pour leurs composants
+```
 
-  # Recommandations : affinage par IA via Cloud Functions, preferences dictees
-  cloud_functions: 6.5.0
-  speech_to_text: 7.5.0
-  firebase_ai: ^4.0.0
-  firebase_messaging: ^16.7.0
-  firebase_storage: ^13.6.0
+Modules : `auth`, `offers`, `discovery`, `reservations`, `pickup`,
+`notifications`, `impact`, `recommendations`, `favorites`, `admin`.
 
-  # Graphiques (tableau de bord d'impact)
-  fl_chart: 1.2.0
+Principes :
+- **Hors ligne d'abord** : les écrans lisent la copie locale ; une action
+  passe par la file (`SyncController.submit`) et part au retour du réseau.
+- **MySQL est la référence** ; Firestore n'en est qu'une copie de secours.
+- **Une route = une constante** de `AppRoutes` : jamais de chemin écrit en dur.
 
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
+## Conventions de nommage
 
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^6.0.0
+### Dart / Flutter
 
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
+| Élément | Convention | Exemple |
+|---|---|---|
+| Fichier, dossier | `snake_case` | `my_offers_screen.dart` |
+| Classe, enum, typedef | `UpperCamelCase` | `OffersRepository`, `PickupSlot` |
+| Variable, fonction, paramètre | `lowerCamelCase` | `offerSlots()`, `pickupStart` |
+| Membre privé | préfixe `_` | `_submit()`, `_OfferTile` |
+| Provider Riverpod | nom + `Provider` | `myOffersProvider` |
+| Écran | suffixe `Screen` | `ProfileScreen` (`profile_screen.dart`) |
+| Dépôt | suffixe `Repository` | `GuestRepository` |
+| Constante | `lowerCamelCase` | `maxPickupSlots` |
 
-# The following section is specific to Flutter packages.
-flutter:
+- Libellés, messages et commentaires **en français** ; identifiants en anglais.
+- Un commentaire `///` explique **pourquoi** (règle métier, cas limite), pas ce
+  que le code dit déjà.
+- Le code est formaté par `dart format` et doit passer `flutter analyze` sans
+  avertissement.
 
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
-  uses-material-design: true
+### API (`server/`)
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+| Élément | Convention | Exemple |
+|---|---|---|
+| Fichier | `snake_case.js` | `login_attempts.js` |
+| Route | nom au pluriel, `kebab-case` | `/api/offers/:id/slots`, `/api/auth/release-orphan` |
+| Champ JSON, colonne MySQL | `snake_case` | `pickup_start`, `quantity_available` |
+| Table MySQL | `snake_case` au pluriel | `offer_slots`, `device_tokens` |
+| Variable d'environnement | `MAJUSCULES_SOULIGNÉES` | `MAIL_REPLY_TO` |
 
-  # An image asset can refer to one or more resolution-specific "variants", see
-  # https://flutter.dev/to/resolution-aware-images
+Toute modification du schéma passe par `server/src/db/schema.sql` **et**
+`migrate.js` (colonnes ajoutées sur les bases existantes).
 
-  # For details regarding adding assets from package dependencies, see
-  # https://flutter.dev/to/asset-from-package
+## Conventions Git
 
-  # To add custom fonts to your application, add a fonts section here,
-  # in this "flutter" section. Each entry in this list should have a
-  # "family" key with the font family name, and a "fonts" key with a
-  # list giving the asset and other descriptors for the font. For
-  # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
-'@ | Set-Content -Path pubspec.yaml -Encoding utf8
+### Branches
+
+| Branche | Rôle |
+|---|---|
+| `main` | Version en ligne. Un push déploie (Render, GitHub Pages). Jamais de commit direct. |
+| `dev` | Intégration de l'équipe. Reçoit les pull requests, contrôlées par la CI. |
+| `features-<nom>` | Branche de travail de chaque membre (ex. `features-aksomda`). |
+
+Déroulement :
+1. Mettre sa branche à jour : `git pull origin dev`.
+2. Travailler et commiter sur `features-<nom>`.
+3. Ouvrir une pull request **vers `dev`** ; elle n'est fusionnée que si la CI
+   est verte.
+4. `dev` est fusionnée dans `main` pour une mise en ligne.
+
+### Messages de commit
+
+Format : `<type>(T-xx): description en français`, où `T-xx` est la tâche du
+tableau de suivi.
+
+| Type | Usage |
+|---|---|
+| `feat` | Nouvelle fonctionnalité |
+| `fix` | Correction de bogue |
+| `refactor` | Réorganisation sans changement de comportement |
+| `test` | Tests ajoutés ou corrigés |
+| `docs` | Documentation |
+| `chore` | Dépendances, configuration, outillage |
+
+Exemples :
+
+```text
+feat(T-23): créneaux de retrait multiples choisis à la réservation
+fix(T-17): libérer un compte Firebase orphelin lors de l'inscription
+docs(T-10): conventions Git dans le README
+```
+
+Règles :
+- Un commit = un changement cohérent ; pas de fichiers sans rapport.
+- Jamais de secret : `server/.env` et les comptes de service Firebase sont
+  ignorés par `.gitignore` (voir `server/.env.example` pour les clés attendues).
+- Les versions des dépendances du `pubspec.yaml` sont figées : toute mise à
+  jour passe par une pull request vers `dev`.

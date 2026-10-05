@@ -70,7 +70,11 @@ class SyncService {
           data: action.body,
           options: Options(
             method: action.method,
-            headers: {'Idempotency-Key': action.key},
+            headers: {
+              'Idempotency-Key': action.key,
+              // Heure réelle de l'action (ex. retrait validé hors ligne).
+              'X-Action-At': action.createdAt.toIso8601String(),
+            },
           ),
         );
         await outbox.remove(action.localId!);

@@ -15,12 +15,49 @@ export const PHOTO_PATH = `IF(o.photo_updated_at IS NULL, NULL,
   CONCAT('/offers/', o.id, '/photo?v=', UNIX_TIMESTAMP(o.photo_updated_at)))`;
 
 /**
+ * Créneaux de retrait de l'offre : [{ id, start, end }] (dates ISO UTC,
+ * ordre non garanti : à trier) ; NULL pour une offre sans créneau
+ * enregistré (toute la période).
+ */
+export const SLOTS_JSON = `(SELECT JSON_ARRAYAGG(JSON_OBJECT(
+    'id', s.id,
+    'start', DATE_FORMAT(s.start_at, '%Y-%m-%dT%H:%i:%sZ'),
+    'end', DATE_FORMAT(s.end_at, '%Y-%m-%dT%H:%i:%sZ')))
+  FROM offer_slots s WHERE s.offer_id = o.id)`;
+
+/** Nombre maximal de créneaux par offre. */
+export const MAX_SLOTS = 6;
+
+/**
+ * Créneaux à enregistrer : ceux envoyés, sinon un seul couvrant toute la
+ * période. Renvoie aussi le premier début et la dernière fin.
+ */
+export function normalizeSlots(data) {
+  const slots = (data.slots?.length ? data.slots : [{ start: data.pickup_start, end: data.pickup_end }])
+    .map((slot) => ({ start: new Date(slot.start), end: new Date(slot.end) }))
+    .sort((a, b) => a.start - b.start);
+  return {
+    slots,
+    pickupStart: slots[0].start,
+    pickupEnd: new Date(Math.max(...slots.map((slot) => slot.end.getTime()))),
+  };
+}
+
+/** Remplace les créneaux de l'offre. */
+export async function saveSlots(conn, offerId, slots) {
+  await conn.query('DELETE FROM offer_slots WHERE offer_id = ?', [offerId]);
+  await conn.query('INSERT INTO offer_slots (offer_id, start_at, end_at) VALUES ?', [
+    slots.map((slot) => [offerId, slot.start, slot.end]),
+  ]);
+}
+
+/**
  * `is_guest` : publiée sans compte ; `contact_phone` : téléphone de l'invité,
  * seul moyen de le joindre (celui d'un compte n'est donné qu'après réservation).
  */
 const OFFER_FIELDS = `o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
          o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone,
-         ${PHOTO_PATH} AS photo_path`;
+         ${PHOTO_PATH} AS photo_path, ${SLOTS_JSON} AS slots`;
 
 const OFFER_JOINS = `
   FROM offers o
@@ -46,12 +83,21 @@ export async function saveContactEmail(conn, offerId, email) {
   }
 }
 
+/**
+ * Publieur en mesure de confirmer les réservations : invité, ou compte
+ * actif (les offres d'un compte désactivé sont masquées, puis réapparaissent
+ * s'il est réactivé).
+ */
+export const DONOR_ACTIVE = `(o.donor_id IS NULL OR EXISTS (
+    SELECT 1 FROM users du WHERE du.id = o.donor_id AND du.status = 'active'))`;
+
 /** Offre visible et réservable par les bénéficiaires. */
 export const OFFER_AVAILABLE = `
   o.status = 'published'
   AND o.quantity_available > 0
   AND o.expiry_date >= CURDATE()
-  AND o.pickup_end > NOW()`;
+  AND o.pickup_end > NOW()
+  AND ${DONOR_ACTIVE}`;
 
 /** Distance en km (haversine) entre (?, ?) et l'offre : params [lat, lng, lat]. */
 export const DISTANCE_KM = `

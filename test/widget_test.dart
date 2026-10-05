@@ -10,6 +10,7 @@ import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/offline/outbox.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/features/admin/data/admin_repository.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
@@ -267,21 +268,77 @@ void main() {
     });
   });
 
-  testWidgets('menu : écrans regroupés par bloc thématique', (tester) async {
+  testWidgets('menu sans compte : écrans utiles, descriptions, sans chemins', (
+    tester,
+  ) async {
     await pumpRoute(tester, AppRoutes.adminSettings);
     tester.state<ScaffoldState>(find.byType(Scaffold).first).openDrawer();
     await tester.pumpAndSettle();
 
-    for (final group in MenuGroup.values) {
-      expect(find.text(group.title), findsWidgets, reason: group.title);
+    final drawer = find.byType(Drawer);
+    for (final item in guestMenuItems) {
+      expect(
+        find.descendant(of: drawer, matching: find.text(item.title)),
+        findsOneWidget,
+        reason: item.title,
+      );
+      // Description affichée au survol (appui long sur téléphone).
+      expect(find.byTooltip(item.description), findsWidgets);
     }
-    // Bloc de l'écran affiché : déplié.
-    expect(find.text('/admin/settings'), findsOneWidget);
-    expect(find.text('/impact'), findsNothing);
+    // Ni écrans d'administration ni chemins techniques.
+    expect(
+      find.descendant(of: drawer, matching: find.text('Tableau de bord')),
+      findsNothing,
+    );
+    expect(find.text('/home'), findsNothing);
 
-    await tester.tap(find.text('Impacts par donateur'));
+    // Mode debug : liste de tous les écrans, repliée, en bas du menu.
+    final debug = find.text('Développement : tous les écrans');
+    await tester.scrollUntilVisible(
+      debug,
+      200,
+      scrollable: find
+          .descendant(of: drawer, matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.tap(debug);
     await tester.pumpAndSettle();
-    expect(find.text('/impact'), findsOneWidget);
+    final group = find.text(MenuGroup.home.title).last;
+    await tester.ensureVisible(group);
+    await tester.pumpAndSettle();
+    await tester.tap(group);
+    await tester.pumpAndSettle();
+    expect(find.text('/home'), findsOneWidget);
+  });
+
+  test('menu selon le rôle', () {
+    expect(menuItemsFor(loggedIn: false), guestMenuItems);
+    expect(menuItemsFor(loggedIn: true, role: 'beneficiary'), userMenuItems);
+    expect(menuItemsFor(loggedIn: true, role: 'admin'), adminMenuItems);
+    expect(
+      userMenuItems.map((item) => item.location),
+      isNot(contains(AppRoutes.login)),
+    );
+  });
+
+  testWidgets('écran d’administration refusé à un compte non administrateur', (
+    tester,
+  ) async {
+    final overrides = await tester.runAsync(screenOverrides);
+    final router = createRouter(
+      initialLocation: AppRoutes.adminSettings,
+      isLoggedIn: () => true,
+      isAdmin: () => false,
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: overrides!,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path, AppRoutes.home);
   });
 
   testWidgets('activation : e-mail pré-rempli, code à 6 chiffres exigé', (

@@ -1,4 +1,4 @@
-﻿name: repo_partage_plus
+name: repo_partage_plus
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -59,11 +59,13 @@ dependencies:
   speech_to_text: 7.5.0
   firebase_ai: ^4.0.0
   firebase_messaging: ^16.7.0
-  firebase_storage: ^13.6.0
   image_picker: ^1.2.3
 
   # Graphiques (tableau de bord d'impact)
   fl_chart: 1.2.0
+
+  # QR code du retrait (montré par le bénéficiaire, scanné par le donateur)
+  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:

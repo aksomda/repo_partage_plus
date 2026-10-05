@@ -156,6 +156,29 @@ void main() {
     );
 
     test(
+      'compte Firebase orphelin, autre mot de passe : libéré puis recréé',
+      () async {
+        firebase.accounts['awa@test.local'] = 'ancien-motdepasse1';
+        server.handler = (request) async {
+          if (request.path == '/auth/release-orphan') {
+            // Le serveur supprime le compte Firebase sans profil.
+            firebase.accounts.remove('awa@test.local');
+            return jsonResponse(200, const {});
+          }
+          return jsonResponse(201, {
+            'user': {'status': 'pending'},
+          });
+        };
+
+        await repository().register(registration);
+
+        expect(bodyOf('/auth/release-orphan'), {'email': 'awa@test.local'});
+        expect(firebase.accounts['awa@test.local'], 'motdepasse1');
+        expect(bodyOf('/auth/register')['id_token'], 'token-awa@test.local');
+      },
+    );
+
+    test(
       'profil déjà enregistré (409 email_taken) : réinitialisation',
       () async {
         firebase.accounts['awa@test.local'] = 'motdepasse1';

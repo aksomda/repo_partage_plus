@@ -62,6 +62,8 @@ export const config = {
     collection: env.MAIL_COLLECTION || 'mail',
     // Sans MAIL_FROM, l'extension utilise son expéditeur par défaut.
     from: env.MAIL_FROM || null,
+    // Adresse à laquelle arrivent les réponses des destinataires (les deux modes).
+    replyTo: env.MAIL_REPLY_TO || null,
   },
   // IA de recommandation intégrée au serveur (repli de la Cloud Function).
   rodium: {

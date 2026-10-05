@@ -6,7 +6,7 @@ import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
-import 'package:repo_partage_plus/core/widgets/dev_menu.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/features/admin/data/admin_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
@@ -67,7 +67,7 @@ class _OfferModerationScreenState extends ConsumerState<OfferModerationScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Modération des offres')),
-      drawer: DevMenu(
+      drawer: AppMenu(
         currentLocation: GoRouterState.of(context).uri.toString(),
       ),
       body: RefreshIndicator(

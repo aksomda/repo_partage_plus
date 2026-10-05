@@ -84,6 +84,21 @@ const realGateway = {
     await firebaseAuth().updateUser(uid, { password });
   },
 
+  /** Compte Firebase de cette adresse : { uid, createdAt }, ou null. */
+  async findUserByEmail(email) {
+    try {
+      const user = await firebaseAuth().getUserByEmail(email);
+      return { uid: user.uid, createdAt: new Date(user.metadata.creationTime) };
+    } catch (error) {
+      if (error?.code === 'auth/user-not-found') return null;
+      throw error;
+    }
+  },
+
+  async deleteUser(uid) {
+    await firebaseAuth().deleteUser(uid);
+  },
+
   async createUser({ email, password, displayName }) {
     const user = await firebaseAuth().createUser({
       email,
@@ -135,6 +150,25 @@ export const firebase = {
       await gateway.setDisabled(uid, disabled);
     } catch (error) {
       console.error('Firebase : statut non mis à jour :', error.message);
+    }
+  },
+
+  /**
+   * Supprime un compte Firebase « orphelin » : créé par une inscription
+   * interrompue (aucun profil MySQL) depuis plus de [minAgeMs]. Sans lui,
+   * l'adresse resterait bloquée si la personne recommence avec un autre mot
+   * de passe. Renvoie true si un compte a été supprimé ; jamais d'erreur.
+   */
+  async releaseOrphan(email, { hasProfile, minAgeMs, now = new Date() }) {
+    try {
+      const user = await gateway.findUserByEmail?.(email);
+      if (!user || (await hasProfile(user.uid))) return false;
+      if (now - user.createdAt < minAgeMs) return false;
+      await gateway.deleteUser(user.uid);
+      return true;
+    } catch (error) {
+      console.error('Firebase : compte orphelin non libéré :', error.message);
+      return false;
     }
   },
 

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
@@ -321,6 +322,18 @@ class _Bubble extends StatelessWidget {
               ],
             ],
           ),
+          if (item.link != null)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                'Voir le détail ›',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
           if (item.pending)
             Text(
               'En attente d’envoi',
@@ -355,7 +368,14 @@ class _Bubble extends StatelessWidget {
             ),
             const SizedBox(width: 6),
           ],
-          Flexible(child: bubble),
+          Flexible(
+            child: item.link == null
+                ? bubble
+                : GestureDetector(
+                    onTap: () => context.push(item.link!),
+                    child: bubble,
+                  ),
+          ),
         ],
       ),
     );

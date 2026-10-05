@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
-import 'package:repo_partage_plus/core/widgets/dev_menu.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/features/admin/data/admin_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
@@ -87,7 +87,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Paramètres')),
-      drawer: DevMenu(
+      drawer: AppMenu(
         currentLocation: GoRouterState.of(context).uri.toString(),
       ),
       body: RefreshIndicator(

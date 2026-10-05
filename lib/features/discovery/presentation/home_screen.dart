@@ -8,6 +8,7 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
+import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
 
 /// Accueil : offres à proximité du point de départ, accessible sans compte.
 class HomeScreen extends ConsumerStatefulWidget {
@@ -67,7 +68,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           if (loggedIn)
             IconButton(
               tooltip: 'Notifications',
-              icon: const Icon(Icons.notifications_none),
+              icon: Badge.count(
+                count: ref.watch(unreadFeedCountProvider),
+                isLabelVisible: ref.watch(unreadFeedCountProvider) > 0,
+                child: const Icon(Icons.notifications_none),
+              ),
               onPressed: () => context.push(AppRoutes.notifications),
             )
           else

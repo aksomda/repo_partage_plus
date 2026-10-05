@@ -85,6 +85,7 @@ class GuestRepository {
     required int offerId,
     required int quantity,
     String? paymentReference,
+    int? slotId,
     required GuestIdentity guest,
   }) async {
     final created = await _send(
@@ -94,6 +95,7 @@ class GuestRepository {
           'offer_id': offerId,
           'quantity': quantity,
           'payment_reference': ?paymentReference,
+          'slot_id': ?slotId,
           'guest': guest.toMap(),
         },
       ),
@@ -138,6 +140,41 @@ class GuestRepository {
         await _store.saveGuestItem(kind, {...item, 'status': 'unavailable'});
       }
     }
+  }
+
+  /// Modifie une publication faite sans compte (jeton de l'appareil).
+  Future<Json> updateOffer(Json offer, Map<String, Object?> changes) async {
+    final updated = await _send(
+      () => _dio.put<Map<String, dynamic>>(
+        ApiEndpoints.offer(offer['id'] as int),
+        data: changes,
+        options: _auth(offer),
+      ),
+    );
+    await _store.saveGuestItem('offers', {
+      ...updated,
+      'guest_token': offer['guest_token'],
+    });
+    return updated;
+  }
+
+  /// Créneaux d'une publication faite sans compte, réservée ou non.
+  Future<Json> updateOfferSlots(
+    Json offer,
+    List<Map<String, Object?>> slots,
+  ) async {
+    final updated = await _send(
+      () => _dio.patch<Map<String, dynamic>>(
+        ApiEndpoints.offerSlots(offer['id'] as int),
+        data: {'slots': slots},
+        options: _auth(offer),
+      ),
+    );
+    await _store.saveGuestItem('offers', {
+      ...updated,
+      'guest_token': offer['guest_token'],
+    });
+    return updated;
   }
 
   Future<void> withdrawOffer(Json offer) async {

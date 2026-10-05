@@ -26,6 +26,7 @@ const USER_COLUMNS = {
   firebase_uid: 'VARCHAR(128) NULL AFTER password_hash',
   actor_id: 'INT UNSIGNED NULL AFTER role',
   email_verified_at: 'DATETIME NULL AFTER status_reason',
+  preferences: 'JSON NULL AFTER longitude',
 };
 
 /** Colonnes ajoutées pour les invités et le paiement hors application. */
@@ -46,6 +47,10 @@ const RESERVATION_COLUMNS = {
   guest_phone: 'VARCHAR(30) NULL AFTER guest_last_name',
   amount: 'DECIMAL(10, 2) NOT NULL DEFAULT 0 AFTER quantity',
   payment_reference: 'VARCHAR(64) NULL AFTER amount',
+  slot_id: 'INT UNSIGNED NULL AFTER status',
+  slot_start: 'DATETIME NULL AFTER slot_id',
+  slot_end: 'DATETIME NULL AFTER slot_start',
+  confirm_reminder_sent_at: 'DATETIME NULL AFTER reminder_sent_at',
 };
 
 /** `updated_at` sur les tables qui n'en avaient pas (copie Firestore). */
@@ -104,6 +109,11 @@ async function upgrade(conn) {
       'ALTER TABLE users ADD CONSTRAINT fk_users_actor FOREIGN KEY (actor_id) REFERENCES actors (id)',
     );
   }
+
+  // Offres antérieures aux créneaux multiples : un créneau, toute la période.
+  await conn.query(`INSERT INTO offer_slots (offer_id, start_at, end_at)
+    SELECT o.id, o.pickup_start, o.pickup_end FROM offers o
+    WHERE NOT EXISTS (SELECT 1 FROM offer_slots s WHERE s.offer_id = o.id)`);
 
   // Acteurs par défaut, uniquement si l'admin n'en a encore configuré aucun.
   const [[{ count }]] = await conn.query('SELECT COUNT(*) AS count FROM actors');

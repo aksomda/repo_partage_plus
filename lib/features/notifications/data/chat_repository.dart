@@ -9,6 +9,7 @@ import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/pending_action.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
+import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 
 /// Nombre maximal d'images par message (comme le serveur).
@@ -53,6 +54,7 @@ class ChatItem {
     this.pending = false,
     this.error,
     this.read = false,
+    this.link,
   });
 
   final DateTime at;
@@ -79,6 +81,9 @@ class ChatItem {
 
   /// Lu par le destinataire (messages envoyés).
   final bool read;
+
+  /// Écran lié à une notification (réservation, offre), ouvert au toucher.
+  final String? link;
 }
 
 DateTime _date(Object? value) =>
@@ -86,6 +91,41 @@ DateTime _date(Object? value) =>
     DateTime.fromMillisecondsSinceEpoch(0);
 
 bool _flag(Object? value) => value == true || value == 1;
+
+/// Données jointes à une notification (objet JSON, ou texte JSON).
+Json _notificationData(Object? value) {
+  if (value is Map) return Map<String, dynamic>.from(value);
+  if (value is String && value.isNotEmpty) {
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } on FormatException {
+      return const {};
+    }
+  }
+  return const {};
+}
+
+/// Notifications adressées au bénéficiaire : sa réservation s'ouvre.
+const _beneficiaryTypes = {
+  'reservation_confirmed',
+  'pickup_reminder',
+  'pickup_done',
+};
+
+/// Écran à ouvrir depuis une notification ; null : rien à ouvrir.
+String? notificationLink(Json notification) {
+  final data = _notificationData(notification['data']);
+  final type = notification['type'];
+  final reservationId = data['reservation_id'];
+  final offerId = data['offer_id'];
+  if (reservationId != null && _beneficiaryTypes.contains(type)) {
+    return AppRoutes.confirmation('$reservationId');
+  }
+  if (reservationId != null) return AppRoutes.myReservations;
+  if (offerId != null) return AppRoutes.offer('$offerId');
+  return null;
+}
 
 /// Messages du mini chat copiés sur l'appareil (sa conversation, ou toutes
 /// pour un administrateur).
@@ -141,12 +181,28 @@ final userChatFeedProvider = Provider<List<ChatItem>>((ref) {
           title: n['title'] as String?,
           body: n['body'] as String?,
           senderName: 'Partage+',
+          read: n['read_at'] != null,
+          link: notificationLink(n),
         ),
     for (final m in ref.watch(chatMessagesProvider))
       _message(m, viewerIsAdmin: false),
     for (final action in ref.watch(_outgoingProvider)) _outgoing(action),
   ];
   return items..sort((a, b) => b.at.compareTo(a.at));
+});
+
+/// Notifications et messages de l'administration pas encore lus, pour le
+/// badge de l'icône Notifications.
+final unreadFeedCountProvider = Provider<int>((ref) {
+  final notifications = ref
+      .watch(snapshotListProvider('notifications'))
+      .where((n) => n['type'] != 'message' && n['read_at'] == null)
+      .length;
+  final messages = ref
+      .watch(chatMessagesProvider)
+      .where((m) => _flag(m['from_admin']) && m['read_at'] == null)
+      .length;
+  return notifications + messages;
 });
 
 /// Conversation d'un utilisateur, vue par l'administrateur.

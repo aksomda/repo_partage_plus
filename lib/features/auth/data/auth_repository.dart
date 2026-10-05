@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/notifications/push_messaging.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
@@ -187,8 +188,26 @@ class AuthRepository {
       try {
         return (await _firebase.signIn(email, password), false);
       } on FirebaseAuthFailure {
-        throw error;
+        // Autre mot de passe : le serveur libère le compte s'il n'a aucun
+        // profil (inscription abandonnée), puis on le recrée une fois.
+        if (!await _releaseOrphan(email)) throw error;
+        try {
+          return (await _firebase.createAccount(email, password), true);
+        } on FirebaseAuthFailure {
+          throw error;
+        }
       }
+    }
+  }
+
+  /// Demande au serveur de libérer un compte Firebase sans profil. false si
+  /// le serveur est injoignable (le compte reste alors bloqué).
+  Future<bool> _releaseOrphan(String email) async {
+    try {
+      await _post(ApiEndpoints.releaseOrphan, {'email': email});
+      return true;
+    } on ApiException {
+      return false;
     }
   }
 
@@ -282,6 +301,7 @@ class AuthRepository {
   /// Efface la session et toutes les données locales.
   /// Vérifier [unsentActions] avant, et prévenir l'utilisateur.
   Future<void> logout() async {
+    await _ref.read(pushMessagingProvider).unregister();
     await _firebase.signOut();
     await _ref.read(localStoreProvider).clear();
     _ref.read(authTokenProvider.notifier).set(null);

@@ -62,10 +62,14 @@ class AccountMenuFooter extends ConsumerWidget {
     final muted = onDark ? Colors.white70 : AppColors.textMuted;
 
     if (!ref.watch(isLoggedInProvider)) {
-      return ListTile(
-        leading: Icon(Icons.login, color: onDark ? color : AppColors.primary),
-        title: Text('Se connecter', style: TextStyle(color: color)),
-        onTap: () => context.go(AppRoutes.login),
+      return Tooltip(
+        message: 'Accéder à votre compte',
+        waitDuration: const Duration(milliseconds: 400),
+        child: ListTile(
+          leading: Icon(Icons.login, color: onDark ? color : AppColors.primary),
+          title: Text('Se connecter', style: TextStyle(color: color)),
+          onTap: () => context.go(AppRoutes.login),
+        ),
       );
     }
 
@@ -96,16 +100,23 @@ class AccountMenuFooter extends ConsumerWidget {
               ],
             ),
           ),
-        ListTile(
-          leading: Icon(Icons.logout, color: onDark ? color : AppColors.danger),
-          title: Text(
-            'Se déconnecter',
-            style: TextStyle(
+        Tooltip(
+          message: 'Fermer la session et effacer les données de cet appareil',
+          waitDuration: const Duration(milliseconds: 400),
+          child: ListTile(
+            leading: Icon(
+              Icons.logout,
               color: onDark ? color : AppColors.danger,
-              fontWeight: FontWeight.w600,
             ),
+            title: Text(
+              'Se déconnecter',
+              style: TextStyle(
+                color: onDark ? color : AppColors.danger,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            onTap: () => confirmLogout(context, ref),
           ),
-          onTap: () => confirmLogout(context, ref),
         ),
       ],
     );

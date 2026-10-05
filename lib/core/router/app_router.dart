@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
+import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_screen.dart';
@@ -38,20 +39,29 @@ import 'package:repo_partage_plus/features/reservations/presentation/reserve_scr
 import 'package:repo_partage_plus/features/reservations/presentation/reservation_confirmation_screen.dart';
 
 /// [isLoggedIn] : null (tests) = aucune redirection vers la connexion.
+/// [isAdmin] : null tant que le profil n'est pas connu (pas de redirection) ;
+/// false : les écrans d'administration renvoient à l'accueil.
 GoRouter createRouter({
   String initialLocation = AppRoutes.splash,
   bool Function()? isLoggedIn,
+  bool? Function()? isAdmin,
   Listenable? refreshListenable,
 }) {
   return GoRouter(
     initialLocation: initialLocation,
     refreshListenable: refreshListenable,
     redirect: (context, state) {
-      if (isLoggedIn == null || isLoggedIn()) return null;
+      if (isLoggedIn == null) return null;
       final path = state.uri.path;
-      return AppRoutes.requiresLogin(path)
-          ? AppRoutes.loginThen(state.uri.toString())
-          : null;
+      if (!isLoggedIn()) {
+        return AppRoutes.requiresLogin(path)
+            ? AppRoutes.loginThen(state.uri.toString())
+            : null;
+      }
+      if (AppRoutes.requiresAdmin(path) && isAdmin?.call() == false) {
+        return AppRoutes.home;
+      }
+      return null;
     },
     routes: [
       // Auth
@@ -118,6 +128,12 @@ GoRouter createRouter({
         path: AppRoutes.offerDetail,
         builder: (context, state) =>
             OfferDetailScreen(offerId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: AppRoutes.editOfferPattern,
+        builder: (context, state) => CreateOfferScreen(
+          offerId: int.tryParse(state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: AppRoutes.reservePattern,
@@ -219,10 +235,16 @@ class _SessionListenable extends ChangeNotifier {
 final routerProvider = Provider<GoRouter>((ref) {
   final session = _SessionListenable();
   ref.listen(authTokenProvider, (_, _) => session.changed());
+  // Rôle connu ou changé : les droits sur les écrans sont réévalués.
+  ref.listen(profileProvider, (_, _) => session.changed());
   ref.onDispose(session.dispose);
 
   final router = createRouter(
     isLoggedIn: () => ref.read(authTokenProvider) != null,
+    isAdmin: () {
+      final profile = ref.read(profileProvider);
+      return profile == null ? null : profile['role'] == 'admin';
+    },
     refreshListenable: session,
   );
   ref.onDispose(router.dispose);

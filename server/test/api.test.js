@@ -25,9 +25,12 @@ const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js')
 const { HttpError } = await import('../src/http/errors.js');
 const { fillMonths, MONTHS } = await import('../src/routes/impact.js');
 const { isDatabaseUnavailable } = await import('../src/db/pool.js');
+const { setPushSender } = await import('../src/services/push.js');
+const { resetLoginAttempts, MAX_FAILURES } = await import('../src/http/login_attempts.js');
 
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
 const firebaseCalls = [];
+const firebaseUsers = new Map();
 setFirebaseGateway({
   async verifyIdToken(idToken) {
     const [prefix, uid, email] = idToken.split(':');
@@ -46,6 +49,16 @@ setFirebaseGateway({
   async createUser({ email }) {
     firebaseCalls.push(['created', email]);
     return `uid-${email}`;
+  },
+  // Comptes Firebase connus du faux Firebase (inscriptions interrompues).
+  async findUserByEmail(email) {
+    return firebaseUsers.get(email) ?? null;
+  },
+  async deleteUser(uid) {
+    firebaseCalls.push(['deleted', uid]);
+    for (const [email, user] of firebaseUsers) {
+      if (user.uid === uid) firebaseUsers.delete(email);
+    }
   },
 });
 
@@ -1517,5 +1530,665 @@ describe('sans Firebase (Windows / Linux) : compte local et IA du serveur', () =
       'utf8',
     );
     assert.equal(server.replace(/\r\n/g, '\n'), functions.replace(/\r\n/g, '\n'));
+  });
+});
+
+describe('push, créneau de retrait, compte désactivé, expiration, connexion', () => {
+  const pushes = [];
+  const staleToken = `perime-${'p'.repeat(30)}`;
+  const deviceToken = `appareil-${'d'.repeat(30)}`;
+  let categoryId;
+  let donorId;
+
+  const offerBody = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre corrections',
+    quantity: 3,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(-1),
+    pickup_end: futureIso(6),
+    address: 'Rue des tests',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  async function publish(overrides) {
+    const res = await api.post('/api/offers').set(as('donor2')).send(offerBody(overrides));
+    assert.equal(res.status, 201, res.text);
+    return res.body;
+  }
+
+  async function reserve(offerId, quantity = 1) {
+    const res = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offerId, quantity });
+    assert.equal(res.status, 201, res.text);
+    return res.body;
+  }
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    setPushSender({
+      async send(tokens, message) {
+        pushes.push({ tokens, message });
+        return tokens.map((token) =>
+          token === staleToken ? 'messaging/registration-token-not-registered' : null,
+        );
+      },
+    });
+
+    // Donateur créé pour ce bloc : il sera désactivé puis réactivé.
+    const actors = await api.get('/api/admin/actors').set(as('admin'));
+    const commercant = actors.body.find((actor) => actor.code === 'commercant');
+    const created = await api.post('/api/admin/users').set(as('admin')).send({
+      first_name: 'Issa',
+      last_name: 'Ouédraogo',
+      email: 'donateur.corrections@test.local',
+      phone: '+226 70 11 11 11',
+      actor_id: commercant.id,
+      password: 'Provisoire1',
+    });
+    assert.equal(created.status, 201, created.text);
+    donorId = created.body.id;
+    const session = await api
+      .post('/api/auth/login')
+      .send({ email: 'donateur.corrections@test.local', password: 'Provisoire1' });
+    tokens.donor2 = session.body.token;
+  });
+
+  after(() => {
+    setPushSender(null);
+    resetLoginAttempts();
+  });
+
+  test('push : jeton enregistré, envoyé après la confirmation, jeton périmé supprimé', async () => {
+    for (const token of [deviceToken, staleToken]) {
+      const res = await api
+        .post('/api/users/me/devices')
+        .set(as('beneficiary'))
+        .send({ token, platform: 'android' });
+      assert.equal(res.status, 204, res.text);
+    }
+
+    const offer = await publish({ title: 'Offre push' });
+    const reservation = await reserve(offer.id);
+    pushes.length = 0;
+    const confirm = await api
+      .patch(`/api/reservations/${reservation.id}/confirm`)
+      .set(as('donor2'));
+    assert.equal(confirm.status, 200, confirm.text);
+
+    // Le push part après la transaction : on laisse passer la boucle d'événements.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const sent = pushes.find((push) => push.message.notification.title === 'Réservation confirmée');
+    assert.ok(sent, 'push non envoyé');
+    assert.ok(sent.tokens.includes(deviceToken));
+    assert.equal(sent.message.data.type, 'reservation_confirmed');
+    assert.equal(sent.message.data.reservation_id, String(reservation.id));
+
+    const [rows] = await pool.query('SELECT token FROM device_tokens WHERE token = ?', [staleToken]);
+    assert.equal(rows.length, 0);
+
+    const removed = await api
+      .delete('/api/users/me/devices')
+      .set(as('beneficiary'))
+      .send({ token: deviceToken });
+    assert.equal(removed.status, 204);
+  });
+
+  test('retrait refusé avant le créneau ; heure réelle d’une action hors ligne prise en compte', async () => {
+    const offer = await publish({
+      title: 'Offre créneau',
+      pickup_start: futureIso(3),
+      pickup_end: futureIso(8),
+    });
+    const reservation = await reserve(offer.id);
+    await api.patch(`/api/reservations/${reservation.id}/confirm`).set(as('donor2'));
+
+    const early = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(early.status, 409);
+    assert.equal(early.body.details.code, 'pickup_too_early');
+
+    // Validé hors ligne pendant le créneau, envoyé plus tard : accepté.
+    await pool.query(
+      'UPDATE offers SET pickup_start = NOW() - INTERVAL 5 HOUR, pickup_end = NOW() + INTERVAL 1 HOUR WHERE id = ?',
+      [offer.id],
+    );
+    const actionAt = futureIso(-2);
+    const late = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .set('X-Action-At', actionAt)
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(late.status, 200, late.text);
+    assert.equal(new Date(late.body.picked_up_at).toISOString().slice(0, 16), actionAt.slice(0, 16));
+  });
+
+  test('impact : poids non indiqué estimé d’après l’unité', async () => {
+    const before = (await api.get('/api/impact/me').set(as('beneficiary'))).body;
+    const offer = await publish({ title: 'Riz en vrac', unit: 'kg', quantity: 5 });
+    const reservation = await reserve(offer.id, 2);
+    await api.patch(`/api/reservations/${reservation.id}/confirm`).set(as('donor2'));
+    const pickup = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(pickup.status, 200, pickup.text);
+
+    const after = (await api.get('/api/impact/me').set(as('beneficiary'))).body;
+    assert.equal(Number((after.food_kg - before.food_kg).toFixed(1)), 2);
+    assert.equal(after.estimated_pickups - before.estimated_pickups, 1);
+  });
+
+  test('compte désactivé : offres masquées, réservations annulées et notifiées', async () => {
+    const offer = await publish({ title: 'Offre donateur suspendu' });
+    const reservation = await reserve(offer.id);
+
+    const suspend = await api
+      .patch(`/api/admin/users/${donorId}/status`)
+      .set(as('admin'))
+      .send({ status: 'suspended', reason: 'Test des corrections' });
+    assert.equal(suspend.status, 200, suspend.text);
+
+    const listed = await api.get('/api/offers?q=donateur%20suspendu');
+    assert.equal(listed.body.length, 0);
+    const blocked = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(blocked.status, 409);
+
+    const mine = await api.get(`/api/reservations/${reservation.id}`).set(as('beneficiary'));
+    assert.equal(mine.body.status, 'cancelled');
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    assert.ok(notifications.body.some((n) => /compte du donateur a été désactivé/.test(n.body)));
+
+    const reactivate = await api
+      .patch(`/api/admin/users/${donorId}/status`)
+      .set(as('admin'))
+      .send({ status: 'active' });
+    assert.equal(reactivate.status, 200);
+    const back = await api.get('/api/offers?q=donateur%20suspendu');
+    assert.equal(back.body.length, 1);
+    assert.equal(back.body[0].quantity_available, 3);
+  });
+
+  test('expiration : le bénéficiaire est prévenu de l’annulation', async () => {
+    const offer = await publish({ title: 'Offre qui expire' });
+    const reservation = await reserve(offer.id);
+    await pool.query(
+      'UPDATE offers SET pickup_start = NOW() - INTERVAL 3 HOUR, pickup_end = NOW() - INTERVAL 1 MINUTE WHERE id = ?',
+      [offer.id],
+    );
+
+    const jobs = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.equal(jobs.status, 200);
+    assert.ok(jobs.body.expired_offers >= 1);
+
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    const expired = notifications.body.find((n) => n.title === 'Réservation expirée');
+    assert.ok(expired, 'bénéficiaire non prévenu');
+    const data = typeof expired.data === 'string' ? JSON.parse(expired.data) : expired.data;
+    assert.equal(data.reservation_id, reservation.id);
+  });
+
+  test('connexion : trop d’échecs, blocage temporaire (429)', async () => {
+    resetLoginAttempts();
+    const email = 'cible.force.brute@test.local';
+    for (let i = 0; i < MAX_FAILURES; i += 1) {
+      const res = await api.post('/api/auth/login').send({ email, password: `faux${i}` });
+      assert.equal(res.status, 401);
+    }
+    const blocked = await api.post('/api/auth/login').send({ email, password: 'encore' });
+    assert.equal(blocked.status, 429);
+    assert.equal(blocked.body.details.code, 'too_many_attempts');
+
+    // Les autres comptes ne sont pas bloqués.
+    const other = await api
+      .post('/api/auth/login')
+      .send({ email: 'beneficiaire@demo.local', password: DEMO_PASSWORD });
+    assert.equal(other.status, 200);
+  });
+});
+
+describe('profil, préférences et créneaux de retrait', () => {
+  const pushes = [];
+  let categoryId;
+
+  const slotOffer = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre à créneaux',
+    quantity: 4,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    address: 'Place des créneaux',
+    latitude: 12.37,
+    longitude: -1.52,
+    slots: [
+      { start: futureIso(5), end: futureIso(7) },
+      { start: futureIso(-1), end: futureIso(1) },
+    ],
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    tokens.beneficiary2 = await login('restaurant@demo.local');
+    setPushSender({
+      async send(deviceTokens, message) {
+        pushes.push({ tokens: deviceTokens, message });
+        return deviceTokens.map(() => null);
+      },
+    });
+  });
+
+  after(() => setPushSender(null));
+
+  test('profil : prénom, nom et téléphone modifiés, nom affiché recalculé', async () => {
+    const res = await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ first_name: 'Aminata', last_name: 'Sawadogo', phone: '+226 71 22 33 44' });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.name, 'Aminata Sawadogo');
+    assert.equal(res.body.phone, '+226 71 22 33 44');
+
+    const invalid = await api.patch('/api/users/me').set(as('beneficiary')).send({ phone: 'abc' });
+    assert.equal(invalid.status, 400);
+  });
+
+  test('préférences fusionnées, et push désactivé par l’utilisateur', async () => {
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { reco: { max_distance_km: 5 } } });
+    const res = await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { push_enabled: false } });
+    assert.equal(res.status, 200, res.text);
+    assert.deepEqual(res.body.preferences, { reco: { max_distance_km: 5 }, push_enabled: false });
+
+    const token = `profil-${'t'.repeat(30)}`;
+    await api
+      .post('/api/users/me/devices')
+      .set(as('beneficiary'))
+      .send({ token, platform: 'android' });
+    const offer = (
+      await api
+        .post('/api/offers')
+        .set(as('donor2'))
+        .send(
+          slotOffer({
+            title: 'Offre préférences push',
+            slots: undefined,
+            pickup_start: futureIso(-1),
+            pickup_end: futureIso(4),
+          }),
+        )
+    ).body;
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    // Push désactivé : la confirmation reste dans l'application seulement.
+    pushes.length = 0;
+    await api.patch(`/api/reservations/${reservation.body.id}/confirm`).set(as('donor2'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(pushes.every((push) => !push.tokens.includes(token)));
+
+    // Réactivé (clé supprimée) : l'annulation arrive en push.
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { push_enabled: null } });
+    await api.patch(`/api/reservations/${reservation.body.id}/cancel`).set(as('donor2'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(pushes.some((push) => push.tokens.includes(token)));
+
+    const me = await api.get('/api/auth/me').set(as('beneficiary'));
+    assert.equal(me.body.preferences.push_enabled, undefined);
+    assert.equal(me.body.preferences.reco.max_distance_km, 5);
+  });
+
+  test('offre à plusieurs créneaux : période globale et créneaux renvoyés', async () => {
+    const res = await api.post('/api/offers').set(as('donor')).send(slotOffer());
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.slots.length, 2);
+    // Période de l'offre : premier début, dernière fin.
+    const starts = res.body.slots.map((slot) => Date.parse(slot.start));
+    const ends = res.body.slots.map((slot) => Date.parse(slot.end));
+    assert.equal(Date.parse(res.body.pickup_start), Math.min(...starts));
+    assert.equal(Date.parse(res.body.pickup_end), Math.max(...ends));
+
+    const bad = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(slotOffer({ slots: [{ start: futureIso(3), end: futureIso(2) }] }));
+    assert.equal(bad.status, 400);
+  });
+
+  test('réservation : créneau obligatoire, enregistré, puis contrôlé au retrait', async () => {
+    const offer = (await api.post('/api/offers').set(as('donor')).send(slotOffer())).body;
+    const [, later] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+
+    const missing = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.body.details.code, 'slot_required');
+
+    const res = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1, slot_id: later.id });
+    assert.equal(res.status, 201, res.text);
+    assert.equal(Date.parse(res.body.pickup_start), Date.parse(later.start));
+    assert.equal(Date.parse(res.body.pickup_end), Date.parse(later.end));
+
+    // Créneau choisi dans 5 h : retrait encore trop tôt.
+    await api.patch(`/api/reservations/${res.body.id}/confirm`).set(as('donor'));
+    const early = await api
+      .post(`/api/reservations/${res.body.id}/pickup`)
+      .set(as('donor'))
+      .send({ pickup_code: res.body.pickup_code });
+    assert.equal(early.status, 409);
+    assert.equal(early.body.details.code, 'pickup_too_early');
+  });
+
+  test('tâches : rappel de confirmation au donateur, créneau manqué annulé', async () => {
+    const offer = (await api.post('/api/offers').set(as('donor')).send(slotOffer())).body;
+    const [current] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary2'))
+      .send({ offer_id: offer.id, quantity: 2, slot_id: current.id });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    const first = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.ok(first.body.confirm_reminders >= 1);
+    const donorNotifications = await api.get('/api/notifications').set(as('donor'));
+    assert.ok(donorNotifications.body.some((n) => n.type === 'confirm_reminder'));
+
+    await pool.query('UPDATE reservations SET slot_end = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [
+      reservation.body.id,
+    ]);
+    const second = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.ok(second.body.missed_slots >= 1);
+    const after = (await api.get(`/api/offers/${offer.id}`)).body;
+    assert.equal(after.quantity_available, 4);
+    const notifications = await api.get('/api/notifications').set(as('beneficiary2'));
+    assert.ok(notifications.body.some((n) => n.title === 'Créneau manqué'));
+  });
+});
+
+describe('indicateurs IA du donateur et indicateurs sociaux de la plateforme', () => {
+  let categoryId;
+  let riskyOfferId;
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    // Offre payante, rien de réservé, retrait qui se termine bientôt : risque élevé.
+    const res = await api.post('/api/offers').set(as('donor')).send({
+      category_id: categoryId,
+      title: 'Offre à risque',
+      quantity: 10,
+      unit: 'portion',
+      price: 500,
+      payment_info: 'Orange Money +226 70 00 00 00',
+      expiry_date: tomorrow(),
+      pickup_start: futureIso(-2),
+      pickup_end: futureIso(3),
+      address: 'Rue du risque',
+      latitude: 12.37,
+      longitude: -1.52,
+    });
+    assert.equal(res.status, 201, res.text);
+    riskyOfferId = res.body.id;
+  });
+
+  after(() => {
+    config.rodium.apiKey = null;
+    setRodiumFetch(null);
+  });
+
+  test('risque de gaspillage et suggestions, aussi dans l’instantané hors ligne', async () => {
+    const res = await api.get('/api/offers/mine/insights').set(as('donor'));
+    assert.equal(res.status, 200, res.text);
+    const risky = res.body.find((insight) => insight.offer_id === riskyOfferId);
+    assert.ok(risky, 'offre absente des indicateurs');
+    assert.ok(risky.risk >= 60, `risque attendu élevé : ${risky.risk}`);
+    assert.equal(risky.level, 'high');
+    assert.ok(risky.suggestions.some((s) => /prix/.test(s)));
+    assert.ok(risky.suggestions.some((s) => /créneau/.test(s)));
+
+    const sync = await api.get('/api/sync').set(as('donor'));
+    assert.ok(sync.body.offer_insights.some((insight) => insight.offer_id === riskyOfferId));
+  });
+
+  test('conseil : par règles sans IA, rédigé par l’IA sinon', async () => {
+    config.rodium.apiKey = null;
+    const rules = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(rules.status, 200, rules.text);
+    assert.equal(rules.body.source, 'rules');
+    assert.match(rules.body.advice, /risque de gaspillage/);
+
+    config.rodium.apiKey = 'rd_sk_test';
+    resetAiRateLimit();
+    let prompt;
+    setRodiumFetch(async (url, options) => {
+      prompt = JSON.parse(JSON.parse(options.body).messages[1].content);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: 'Baissez le prix de l’offre à risque.' } }] }),
+        { status: 200 },
+      );
+    });
+    const ai = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(ai.body.source, 'ai');
+    assert.equal(ai.body.advice, 'Baissez le prix de l’offre à risque.');
+    assert.ok(prompt.offres.some((offer) => offer.titre === 'Offre à risque'));
+
+    // IA en panne : conseil par règles, jamais d'erreur.
+    setRodiumFetch(async () => new Response('panne', { status: 502 }));
+    const down = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(down.status, 200);
+    assert.equal(down.body.source, 'rules');
+  });
+
+  test('impact de la plateforme : indicateurs sociaux', async () => {
+    const res = await api.get('/api/admin/impact').set(as('admin'));
+    assert.equal(res.status, 200, res.text);
+    const { social } = res.body;
+    assert.ok(social.people_helped >= 1);
+    assert.ok(social.active_donors >= 1);
+    assert.ok(social.offers_shared >= 1);
+    assert.ok(social.free_share >= 0 && social.free_share <= 100);
+    assert.ok(social.completion_rate >= 0 && social.completion_rate <= 100);
+  });
+});
+
+describe('inscription bloquée par un compte Firebase orphelin', () => {
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000);
+
+  before(() => resetLoginAttempts());
+  after(() => {
+    firebaseUsers.clear();
+    resetLoginAttempts();
+  });
+
+  test('compte sans profil, créé il y a plus de 10 min : libéré', async () => {
+    firebaseUsers.set('orphelin@test.local', { uid: 'uid-orphelin', createdAt: minutesAgo(60) });
+    const res = await api.post('/api/auth/release-orphan').send({ email: 'orphelin@test.local' });
+    assert.equal(res.status, 204);
+    assert.equal(firebaseUsers.has('orphelin@test.local'), false);
+    assert.deepEqual(firebaseCalls.at(-1), ['deleted', 'uid-orphelin']);
+  });
+
+  test('inscription en cours (moins de 10 min) : conservé', async () => {
+    firebaseUsers.set('recent@test.local', { uid: 'uid-recent', createdAt: minutesAgo(2) });
+    const res = await api.post('/api/auth/release-orphan').send({ email: 'recent@test.local' });
+    assert.equal(res.status, 204);
+    assert.equal(firebaseUsers.has('recent@test.local'), true);
+  });
+
+  test('profil existant (par e-mail ou par compte Firebase) : jamais supprimé', async () => {
+    // Adresse d'un compte MySQL.
+    firebaseUsers.set('beneficiaire@demo.local', { uid: 'uid-demo', createdAt: minutesAgo(600) });
+    await api.post('/api/auth/release-orphan').send({ email: 'beneficiaire@demo.local' });
+    assert.equal(firebaseUsers.has('beneficiaire@demo.local'), true);
+
+    // Compte Firebase rattaché à un profil sous une autre adresse.
+    const [{ firebase_uid: uid }] = (
+      await pool.query('SELECT firebase_uid FROM users WHERE firebase_uid IS NOT NULL LIMIT 1')
+    )[0];
+    firebaseUsers.set('autre.adresse@test.local', { uid, createdAt: minutesAgo(600) });
+    await api.post('/api/auth/release-orphan').send({ email: 'autre.adresse@test.local' });
+    assert.equal(firebaseUsers.has('autre.adresse@test.local'), true);
+  });
+
+  test('adresse inconnue : 204 (ne révèle rien), essais limités', async () => {
+    resetLoginAttempts();
+    for (let i = 0; i < MAX_FAILURES; i += 1) {
+      const res = await api.post('/api/auth/release-orphan').send({ email: 'inconnu@test.local' });
+      assert.equal(res.status, 204);
+    }
+    const blocked = await api.post('/api/auth/release-orphan').send({ email: 'inconnu@test.local' });
+    assert.equal(blocked.status, 429);
+  });
+});
+
+describe('modification sans compte et créneaux d’une offre réservée', () => {
+  let categoryId;
+
+  const body = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre à modifier',
+    quantity: 4,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(1),
+    pickup_end: futureIso(5),
+    address: 'Rue des créneaux',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    resetLoginAttempts();
+  });
+
+  test('offre publiée sans compte : modifiable avec son jeton seulement', async () => {
+    const guest = { first_name: 'Issa', last_name: 'Kaboré', phone: '+226 75 44 33 22' };
+    const created = await api.post('/api/offers').send({ ...body({ title: 'Offre invité' }), guest });
+    assert.equal(created.status, 201, created.text);
+
+    const anonymous = await api.put(`/api/offers/${created.body.id}`).send(body({ title: 'Pirate' }));
+    assert.equal(anonymous.status, 403);
+    const other = await api
+      .put(`/api/offers/${created.body.id}`)
+      .set(as('donor'))
+      .send(body({ title: 'Pirate' }));
+    assert.equal(other.status, 403);
+
+    const res = await api
+      .put(`/api/offers/${created.body.id}`)
+      .set('X-Guest-Token', created.body.guest_token)
+      .send(body({ title: 'Offre invité modifiée', quantity: 6 }));
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.title, 'Offre invité modifiée');
+    assert.equal(res.body.quantity_available, 6);
+    // Identité de l'invité conservée.
+    assert.equal(res.body.guest_phone, guest.phone);
+  });
+
+  test('créneau réservé déplacé : réservation suivie et bénéficiaire prévenu', async () => {
+    const offer = (
+      await api
+        .post('/api/offers')
+        .set(as('donor'))
+        .send(
+          body({
+            title: 'Offre créneaux réservés',
+            slots: [
+              { start: futureIso(1), end: futureIso(3) },
+              { start: futureIso(6), end: futureIso(8) },
+            ],
+          }),
+        )
+    ).body;
+    const [first, second] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1, slot_id: second.id });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    // Le créneau réservé ne peut pas être supprimé.
+    const removal = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('donor'))
+      .send({ slots: [{ id: first.id, start: first.start, end: first.end }] });
+    assert.equal(removal.status, 409);
+    assert.equal(removal.body.details.code, 'slot_reserved');
+
+    // Déplacé d'une heure, et un créneau ajouté : accepté malgré la réservation.
+    const moved = { start: futureIso(7), end: futureIso(9) };
+    const lastEnd = futureIso(12);
+    const res = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('donor'))
+      .send({
+        slots: [
+          { id: first.id, start: first.start, end: first.end },
+          { id: second.id, ...moved },
+          { start: futureIso(10), end: lastEnd },
+        ],
+      });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.slots.length, 3);
+    // Période de l'offre étendue à la fin du nouveau créneau.
+    assert.ok(Math.abs(Date.parse(res.body.pickup_end) - Date.parse(lastEnd)) < 1000);
+
+    const mine = await api.get(`/api/reservations/${reservation.body.id}`).set(as('beneficiary'));
+    assert.ok(Math.abs(Date.parse(mine.body.pickup_start) - Date.parse(moved.start)) < 1000);
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    assert.ok(notifications.body.some((n) => n.type === 'slot_changed'));
+
+    // Seul le publieur modifie ses créneaux.
+    const other = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('beneficiary'))
+      .send({ slots: [{ start: futureIso(2), end: futureIso(3) }] });
+    assert.equal(other.status, 403);
+  });
+
+  test('créneaux d’une offre sans compte, avec son jeton', async () => {
+    const guest = { first_name: 'Awa', last_name: 'Zongo', phone: '+226 76 55 44 33' };
+    const created = (
+      await api.post('/api/offers').send({ ...body({ title: 'Créneaux invité' }), guest })
+    ).body;
+    const res = await api
+      .patch(`/api/offers/${created.id}/slots`)
+      .set('X-Guest-Token', created.guest_token)
+      .send({ slots: [{ start: futureIso(2), end: futureIso(4) }] });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.slots.length, 1);
+
+    const past = await api
+      .patch(`/api/offers/${created.id}/slots`)
+      .set('X-Guest-Token', created.guest_token)
+      .send({ slots: [{ start: futureIso(-5), end: futureIso(-4) }] });
+    assert.equal(past.status, 400);
   });
 });

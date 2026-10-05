@@ -169,6 +169,15 @@ final offerDetailProvider = FutureProvider.autoDispose.family<Json, int>((
   }
 });
 
+/// Risque de gaspillage et suggestions, par id d'offre du donateur
+/// (calculés par le serveur, copiés à chaque synchronisation).
+final offerInsightsProvider = Provider<Map<Object?, Json>>(
+  (ref) => {
+    for (final insight in ref.watch(snapshotListProvider('offer_insights')))
+      insight['offer_id']: insight,
+  },
+);
+
 final categoriesProvider = Provider<List<Json>>(
   (ref) => ref.watch(snapshotListProvider('categories')),
 );
@@ -225,6 +234,24 @@ class OffersRepository {
         body: offer,
         targetId: offerId,
         label: 'Modification de « ${offer['title']} »',
+      ),
+    );
+  }
+
+  /// Créneaux d'une offre publiée, réservée ou non (voir PATCH /slots).
+  Future<SubmitResult> updateSlots(
+    int offerId,
+    String title,
+    List<Map<String, Object?>> slots,
+  ) {
+    return _sync.submit(
+      PendingAction(
+        kind: 'offer.slots',
+        method: 'PATCH',
+        path: ApiEndpoints.offerSlots(offerId),
+        body: {'slots': slots},
+        targetId: offerId,
+        label: 'Créneaux de « $title »',
       ),
     );
   }

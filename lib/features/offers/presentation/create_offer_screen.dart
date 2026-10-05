@@ -24,8 +24,13 @@ import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_wid
 
 /// Publication d'une offre, avec ou sans compte. L'offre est visible tout
 /// de suite ; l'administrateur peut la retirer après coup en cas d'abus.
+///
+/// [offerId] : modification d'une offre (pré-remplie), publiée avec ou
+/// sans compte, possible tant qu'elle est publiée et que rien n'est réservé.
 class CreateOfferScreen extends ConsumerStatefulWidget {
-  const CreateOfferScreen({super.key});
+  const CreateOfferScreen({super.key, this.offerId});
+
+  final int? offerId;
 
   @override
   ConsumerState<CreateOfferScreen> createState() => _CreateOfferScreenState();
@@ -48,9 +53,27 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
   late DateTime _expiry;
   late DateTime _pickupStart;
   late DateTime _pickupEnd;
+
+  /// Créneaux supplémentaires (le bénéficiaire choisit le sien).
+  final _extraSlots = <({DateTime start, DateTime end})>[];
+
+  /// Nombre maximal de créneaux par offre (comme le serveur).
+  static const _maxSlots = 6;
   Place? _place;
   Uint8List? _photo;
   String? _photoMime;
+
+  /// Modification : offre d'origine (null en création).
+  Json? _original;
+
+  /// Modification : photo déjà publiée (URL), et photo retirée.
+  String? _currentPhotoUrl;
+  var _photoRemoved = false;
+
+  bool get _editing => widget.offerId != null;
+
+  /// Modification d'une offre publiée sans compte (jeton de l'appareil).
+  bool get _editingGuestOffer => _original?['guest_token'] != null;
   var _free = true;
   var _loading = false;
 
@@ -66,9 +89,54 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
     _expiry = DateTime(now.year, now.month, now.day + 1);
     _pickupStart = DateTime(now.year, now.month, now.day, now.hour + 1);
     _pickupEnd = _pickupStart.add(const Duration(hours: 4));
+    if (_editing) {
+      // Offre du compte, sinon publiée sans compte sur cet appareil.
+      _original = [
+        ...ref.read(myOffersProvider),
+        ...?ref.read(guestOffersProvider).value,
+      ].where((offer) => offer['id'] == widget.offerId).firstOrNull;
+      if (_original != null) _prefill(_original!);
+      return;
+    }
     _place = ref.read(originProvider).place;
     if (_place != null && !_place!.isCurrent) _setAutoAddress(_place!.label);
     unawaited(_locate());
+  }
+
+  /// Modification : champs remplis avec l'offre enregistrée.
+  void _prefill(Json offer) {
+    _categoryId = offer['category_id'] as int?;
+    _title.text = '${offer['title'] ?? ''}';
+    _description.text = '${offer['description'] ?? ''}';
+    _quantity.text = '${offer['initial_quantity'] ?? offer['quantity'] ?? 1}';
+    _unit.text = '${offer['unit'] ?? 'portion'}';
+    if (offer['weight_kg'] case final num weight) _weight.text = '$weight';
+    final price = offer['price'] as num? ?? 0;
+    _free = price == 0;
+    _price.text = price.round().toString();
+    if (offer['payment_info'] case final String info when info.isNotEmpty) {
+      _paymentInfo.paymentInfo = info;
+    }
+    _contactEmail.text = '${offer['contact_email'] ?? ''}';
+    if (DateTime.tryParse('${offer['expiry_date']}') case final expiry?) {
+      _expiry = expiry;
+    }
+    final slots = offerSlots(offer);
+    if (slots.isNotEmpty) {
+      _pickupStart = slots.first.start;
+      _pickupEnd = slots.first.end;
+      _extraSlots.addAll([
+        for (final slot in slots.skip(1)) (start: slot.start, end: slot.end),
+      ]);
+    }
+    final lat = (offer['latitude'] as num?)?.toDouble();
+    final lng = (offer['longitude'] as num?)?.toDouble();
+    final address = '${offer['address'] ?? ''}';
+    _address.text = address;
+    if (lat != null && lng != null) {
+      _place = Place(lat: lat, lng: lng, label: address);
+    }
+    _currentPhotoUrl = offerPhotoUrl(offer);
   }
 
   /// Position GPS exacte au moment de publier (la position mémorisée peut
@@ -240,9 +308,11 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
 
   Future<DateTime?> _pickDateTime(DateTime initial, String help) async {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
     final date = await showDatePicker(
       context: context,
-      initialDate: initial,
+      // Modification d'une offre : une date passée part d'aujourd'hui.
+      initialDate: initial.isBefore(today) ? today : initial,
       firstDate: DateTime(now.year, now.month, now.day),
       lastDate: now.add(const Duration(days: 60)),
       helpText: help,
@@ -280,6 +350,13 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
       return;
     }
 
+    final slots = [(start: _pickupStart, end: _pickupEnd), ..._extraSlots]
+      ..sort((a, b) => a.start.compareTo(b.start));
+    final firstStart = slots.first.start;
+    final lastEnd = slots
+        .map((slot) => slot.end)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+
     final price = _free ? 0 : num.parse(_price.text.trim());
     final weight = num.tryParse(_weight.text.trim().replaceAll(',', '.'));
     final email = _contactEmail.text.trim().toLowerCase();
@@ -301,18 +378,52 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
         'country_name': country.name,
       },
       'expiry_date': _isoDay,
-      'pickup_start': _pickupStart.toUtc().toIso8601String(),
-      'pickup_end': _pickupEnd.toUtc().toIso8601String(),
+      'pickup_start': firstStart.toUtc().toIso8601String(),
+      'pickup_end': lastEnd.toUtc().toIso8601String(),
+      if (_extraSlots.isNotEmpty)
+        'slots': [
+          for (final slot in slots)
+            {
+              'start': slot.start.toUtc().toIso8601String(),
+              'end': slot.end.toUtc().toIso8601String(),
+            },
+        ],
       'address': _address.text.trim(),
       'latitude': _place!.lat,
       'longitude': _place!.lng,
       if (_photo != null)
-        'photo': 'data:$_photoMime;base64,${base64Encode(_photo!)}',
+        'photo': 'data:$_photoMime;base64,${base64Encode(_photo!)}'
+      // Modification : photo publiée retirée (absente : inchangée).
+      else if (_editing && _photoRemoved)
+        'photo': null,
     };
 
     setState(() => _loading = true);
     try {
-      if (ref.read(authTokenProvider) != null) {
+      if (_editingGuestOffer) {
+        await ref.read(guestRepositoryProvider).updateOffer(_original!, offer);
+        if (!mounted) return;
+        showMessage(context, 'Offre modifiée');
+        context.go(AppRoutes.myOffers);
+      } else if (_editing) {
+        final result = await ref
+            .read(offersRepositoryProvider)
+            .update(widget.offerId!, offer);
+        if (!mounted) return;
+        switch (result) {
+          case Sent():
+            showMessage(context, 'Offre modifiée');
+            context.go(AppRoutes.myOffers);
+          case Queued():
+            showMessage(
+              context,
+              'Hors ligne : la modification sera envoyée au retour du réseau',
+            );
+            context.go(AppRoutes.myOffers);
+          case Rejected(:final message):
+            showMessage(context, message, error: true);
+        }
+      } else if (ref.read(authTokenProvider) != null) {
         final result = await ref.read(offersRepositoryProvider).create(offer);
         if (!mounted) return;
         switch (result) {
@@ -376,8 +487,26 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
       }
     });
 
+    // Offre introuvable (copie locale pas encore synchronisée, ou retirée).
+    if (_editing && _original == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Modifier l’offre')),
+        body: const Center(
+          child: EmptyState(
+            icon: Icons.search_off,
+            title: 'Offre introuvable',
+            message:
+                'Elle n’est pas sur cet appareil : revenez à « Mes offres » '
+                'et actualisez.',
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Publier une offre')),
+      appBar: AppBar(
+        title: Text(_editing ? 'Modifier l’offre' : 'Publier une offre'),
+      ),
       body: Form(
         key: _form,
         child: ListView(
@@ -600,7 +729,9 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
                         child: SizedBox(
                           width: double.infinity,
                           child: LoadingButton(
-                            label: 'Publier l’offre',
+                            label: _editing
+                                ? 'Enregistrer les modifications'
+                                : 'Publier l’offre',
                             loading: _loading,
                             onPressed: _submit,
                           ),
@@ -675,8 +806,29 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
   /// Aperçu de la photo choisie, avec changer / retirer.
   Widget _photoField() {
     final photo = _photo;
+    // Modification : photo déjà publiée, gardée tant qu'elle n'est ni
+    // remplacée ni retirée.
+    final currentUrl = photo == null && !_photoRemoved
+        ? _currentPhotoUrl
+        : null;
     return Row(
       children: [
+        if (currentUrl != null) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppTheme.radius),
+            child: Image.network(
+              currentUrl,
+              width: 52,
+              height: 52,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => const SizedBox.square(
+                dimension: 52,
+                child: Icon(Icons.image_outlined),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+        ],
         if (photo != null) ...[
           ClipRRect(
             borderRadius: BorderRadius.circular(AppTheme.radius),
@@ -695,25 +847,77 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
             style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52)),
             icon: const Icon(Icons.add_a_photo_outlined),
             label: Text(
-              photo == null ? 'Ajouter une photo' : 'Changer la photo',
+              photo == null && currentUrl == null
+                  ? 'Ajouter une photo'
+                  : 'Changer la photo',
             ),
           ),
         ),
-        if (photo != null)
+        if (photo != null || currentUrl != null)
           IconButton(
             tooltip: 'Retirer la photo',
             icon: const Icon(Icons.delete_outline, color: AppColors.danger),
             onPressed: () => setState(() {
               _photo = null;
               _photoMime = null;
+              _photoRemoved = true;
             }),
           ),
       ],
     );
   }
 
-  /// Début et fin du créneau de retrait.
+  /// Ajoute un créneau : début, puis fin (2 h plus tard par défaut).
+  Future<void> _addSlot() async {
+    final last = [
+      _pickupEnd,
+      for (final slot in _extraSlots) slot.end,
+    ].reduce((a, b) => a.isAfter(b) ? a : b);
+    final start = await _pickDateTime(
+      last.add(const Duration(hours: 1)),
+      'Début du créneau',
+    );
+    if (start == null || !mounted) return;
+    final end = await _pickDateTime(
+      start.add(const Duration(hours: 2)),
+      'Fin du créneau',
+    );
+    if (end == null || !mounted) return;
+    if (!end.isAfter(start)) {
+      showMessage(context, 'La fin doit être après le début', error: true);
+      return;
+    }
+    setState(() => _extraSlots.add((start: start, end: end)));
+  }
+
+  /// Créneau principal (début et fin), bouton d'ajout, autres créneaux.
   Widget _pickupSlot() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _mainSlot(),
+        if (_extraSlots.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final (index, slot) in _extraSlots.indexed)
+                  InputChip(
+                    label: Text(formatPeriod(slot.start, slot.end)),
+                    onDeleted: () =>
+                        setState(() => _extraSlots.removeAt(index)),
+                    deleteButtonTooltipMessage: 'Retirer ce créneau',
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _mainSlot() {
     return Row(
       children: [
         Expanded(
@@ -749,6 +953,11 @@ class _CreateOfferScreenState extends ConsumerState<CreateOfferScreen> {
             },
             child: Text('${formatDay(_pickupEnd)} ${formatHour(_pickupEnd)}'),
           ),
+        ),
+        IconButton(
+          tooltip: 'Ajouter un créneau',
+          icon: const Icon(Icons.add_circle_outline),
+          onPressed: 1 + _extraSlots.length >= _maxSlots ? null : _addSlot,
         ),
       ],
     );

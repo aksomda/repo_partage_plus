@@ -285,14 +285,31 @@ class PaymentInfoController extends PhoneController {
     return name.isEmpty ? value : '$name : $value';
   }
 
-  /// Pré-remplit avec un texte enregistré (`ORANGE MONEY : +226 73290554`).
+  /// Pré-remplit avec un texte enregistré (`ORANGE MONEY : +226 73290554`),
+  /// ou d'un format plus ancien sans « : » (`Orange Money 70 00 00 00`).
   set paymentInfo(String text) {
-    final separator = text.lastIndexOf(':');
+    var separator = text.lastIndexOf(':');
+    if (separator < 0) {
+      // Opérateur connu en début de texte, sans tenir compte de la casse.
+      final lower = text.toLowerCase();
+      final known = country.mobileMoneyOperators
+          .where((name) => lower.startsWith(name.toLowerCase()))
+          .firstOrNull;
+      if (known != null) {
+        operator = known;
+        value = text.substring(known.length);
+        notifyListeners();
+        return;
+      }
+    }
     final name = separator < 0 ? '' : text.substring(0, separator).trim();
     value = separator < 0 ? text : text.substring(separator + 1);
     if (name.isEmpty) return;
-    if (country.mobileMoneyOperators.contains(name)) {
-      operator = name;
+    final known = country.mobileMoneyOperators
+        .where((operator) => operator.toLowerCase() == name.toLowerCase())
+        .firstOrNull;
+    if (known != null) {
+      operator = known;
     } else {
       operator = other;
       otherOperator.text = name;

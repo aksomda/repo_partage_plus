@@ -12,12 +12,15 @@ en file d'attente. Au retour du réseau, tout est envoyé au serveur, qui accept
 | Voir les offres, offres à proximité, DLC proche | ✅ calculé sur l'appareil à partir de la dernière copie |
 | Réserver | ✅ « en attente d'envoi », acceptée ou refusée à la synchronisation |
 | Voir mes réservations et **mon code de retrait** | ✅ |
-| Confirmer une réservation, valider un retrait (donateur) | ✅ en file ; un code faux revient en « Action refusée » |
-| Publier / modifier / retirer une offre | ✅ en file ; passe en modération à l'envoi |
+| Confirmer une réservation, valider un retrait (donateur) | ✅ en file ; un code faux revient en « Action refusée ». L'heure réelle du retrait est envoyée (en-tête `X-Action-At`) : le créneau est vérifié à cette heure-là |
+| Publier / modifier / retirer une offre | ✅ en file ; publiée dès l'envoi (l'administrateur retire après coup les abus) |
 | Modérer offres et comptes, valider associations, catégories, facteurs (admin) | ✅ en file |
 | Rappel de retrait, alerte DLC proche | ✅ programmés sur le téléphone (Android/iOS) |
 | Notifications, impact | ✅ dernière copie ; « lu » enregistré localement |
-| Fond de carte | ❌ les tuiles OpenStreetMap exigent le réseau : afficher la liste à la place |
+| Fond de carte | ✅ zones déjà consultées (cache de tuiles de 300 Mo, servi « hors ligne d'abord ») ; zone jamais vue : cases vides et bandeau, la liste reste disponible. Pas de téléchargement de zones à l'avance : la politique d'usage des tuiles OpenStreetMap interdit le téléchargement en masse |
+| Favoris (offres, recherches enregistrées) | ✅ gardés sur l'appareil, sans compte aussi ; recopiés dans le compte au retour du réseau |
+| Profil, préférences, notifications push | ✅ modifications en file ; changement de mot de passe : réseau requis |
+| Risque de gaspillage de mes offres | ✅ dernière copie ; conseil rédigé par l'IA : réseau requis |
 
 Sur le **web**, tout fonctionne sauf les notifications système : elles restent visibles dans l'écran Notifications.
 

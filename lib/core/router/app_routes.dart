@@ -28,6 +28,8 @@ abstract final class AppRoutes {
   static const createOffer = '/offers/new';
   static const offerDetail = '/offers/:id';
   static String offer(String id) => '/offers/$id';
+  static const editOfferPattern = '/offers/:id/edit';
+  static String editOffer(Object id) => '/offers/$id/edit';
   static const reservePattern = '/offers/:id/reserve';
   static String reserve(Object id) => '/offers/$id/reserve';
 
@@ -70,6 +72,10 @@ abstract final class AppRoutes {
       path.startsWith('/pickup/') ||
       path == adminDashboard ||
       path.startsWith('/admin/');
+
+  /// Écrans réservés aux administrateurs.
+  static bool requiresAdmin(String path) =>
+      path == adminDashboard || path.startsWith('/admin/');
 
   static String loginThen(String from) =>
       Uri(path: login, queryParameters: {'from': from}).toString();
@@ -171,7 +177,11 @@ final List<RouteMenuEntry> allRouteEntries = [
   ),
   // Impacts par donateur
   const RouteMenuEntry('Mon impact', AppRoutes.impact, MenuGroup.impacts),
-  const RouteMenuEntry('Facteurs', AppRoutes.adminFactors, MenuGroup.impacts),
+  const RouteMenuEntry(
+    'Facteurs d’impact',
+    AppRoutes.adminFactors,
+    MenuGroup.impacts,
+  ),
   // Administration
   const RouteMenuEntry(
     'Tableau de bord',

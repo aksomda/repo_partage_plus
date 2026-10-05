@@ -1,9 +1,11 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
@@ -11,6 +13,7 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/features/offers/presentation/widgets/slots_editor.dart';
 
 /// Publications : celles du compte, et celles faites sans compte sur cet
 /// appareil (retirables grâce à leur jeton).
@@ -64,11 +67,45 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
     }
   }
 
+  /// Créneaux d'une offre déjà réservée (avec ou sans compte).
+  Future<void> _editSlots(Json offer, {required bool guest}) async {
+    final slots = await editPickupSlots(context, offer);
+    if (slots == null || !mounted) return;
+    final payload = slotsPayload(slots);
+    try {
+      if (guest) {
+        await ref
+            .read(guestRepositoryProvider)
+            .updateOfferSlots(offer, payload);
+        if (mounted) showMessage(context, 'Créneaux modifiés');
+        return;
+      }
+      final result = await ref
+          .read(offersRepositoryProvider)
+          .updateSlots(offer['id'] as int, offer['title'] as String, payload);
+      if (!mounted) return;
+      switch (result) {
+        case Sent():
+          showMessage(context, 'Créneaux modifiés');
+        case Queued():
+          showMessage(
+            context,
+            'Hors ligne : les créneaux seront envoyés au retour du réseau',
+          );
+        case Rejected(:final message):
+          showMessage(context, message, error: true);
+      }
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final loggedIn = ref.watch(authTokenProvider) != null;
     final account = loggedIn ? ref.watch(myOffersProvider) : const <Json>[];
     final guest = ref.watch(guestOffersProvider).value ?? const <Json>[];
+    final insights = ref.watch(offerInsightsProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -113,6 +150,7 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
                   ),
                 ),
               ),
+            if (loggedIn && account.isNotEmpty) const _AdviceCard(),
             if (account.isEmpty && guest.isEmpty)
               const EmptyState(
                 icon: Icons.volunteer_activism_outlined,
@@ -124,6 +162,8 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
             for (final offer in account)
               _OfferTile(
                 offer: offer,
+                insight: insights[offer['id']],
+                onEditSlots: () => _editSlots(offer, guest: false),
                 onWithdraw: offer['local'] == true
                     ? null
                     : () => _withdraw(offer, guest: false),
@@ -139,6 +179,7 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
             for (final offer in guest)
               _OfferTile(
                 offer: offer,
+                onEditSlots: () => _editSlots(offer, guest: true),
                 onWithdraw: () => _withdraw(offer, guest: true),
               ),
           ],
@@ -148,11 +189,37 @@ class _MyOffersScreenState extends ConsumerState<MyOffersScreen> {
   }
 }
 
+/// Entièrement modifiable comme le permet le serveur : offre envoyée (avec
+/// ou sans compte), publiée, et rien de réservé.
+bool _editable(Json offer) =>
+    offer['id'] != null &&
+    offer['local'] != true &&
+    const {'pending', 'published'}.contains(offer['status']) &&
+    offer['quantity_available'] == offer['initial_quantity'];
+
+/// Offre déjà réservée mais encore en cours : seuls ses créneaux changent.
+bool _slotsEditable(Json offer) =>
+    offer['id'] != null &&
+    offer['local'] != true &&
+    const {'published', 'reserved'}.contains(offer['status']) &&
+    !_editable(offer);
+
 class _OfferTile extends StatelessWidget {
-  const _OfferTile({required this.offer, required this.onWithdraw});
+  const _OfferTile({
+    required this.offer,
+    required this.onWithdraw,
+    this.onEditSlots,
+    this.insight,
+  });
 
   final Json offer;
   final VoidCallback? onWithdraw;
+
+  /// Modifier les créneaux d'une offre déjà réservée.
+  final VoidCallback? onEditSlots;
+
+  /// Risque de gaspillage et suggestions (offres en cours d'un compte).
+  final Json? insight;
 
   @override
   Widget build(BuildContext context) {
@@ -184,6 +251,7 @@ class _OfferTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     StatusBadge(status),
+                    if (open && insight != null) WasteRisk(insight: insight!),
                     if (status == 'rejected' &&
                         offer['moderation_reason'] != null)
                       Text(
@@ -197,6 +265,21 @@ class _OfferTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (_editable(offer))
+                IconButton(
+                  tooltip: 'Modifier l’offre',
+                  icon: const Icon(Icons.edit_outlined),
+                  color: AppColors.primary,
+                  onPressed: () =>
+                      context.push(AppRoutes.editOffer(offer['id'] as int)),
+                ),
+              if (_slotsEditable(offer) && onEditSlots != null)
+                IconButton(
+                  tooltip: 'Modifier les créneaux de retrait',
+                  icon: const Icon(Icons.edit_calendar_outlined),
+                  color: AppColors.primary,
+                  onPressed: onEditSlots,
+                ),
               if (open && onWithdraw != null)
                 IconButton(
                   tooltip: 'Retirer l’offre',
@@ -213,6 +296,147 @@ class _OfferTile extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Risque de gaspillage d'une offre (0 à 100) et suggestions pour l'éviter.
+class WasteRisk extends StatelessWidget {
+  const WasteRisk({super.key, required this.insight});
+
+  final Json insight;
+
+  @override
+  Widget build(BuildContext context) {
+    final risk = (insight['risk'] as num?)?.toInt() ?? 0;
+    final (label, color) = switch (insight['level']) {
+      'high' => ('élevé', AppColors.danger),
+      'medium' => ('moyen', AppColors.accent),
+      _ => ('faible', AppColors.primary),
+    };
+    final suggestions = [
+      for (final item in insight['suggestions'] as List? ?? const [])
+        if (item is String) item,
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.insights_outlined, size: 16, color: color),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  'Risque de gaspillage : $label ($risk/100)',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          for (final suggestion in suggestions.take(2))
+            Text(
+              '• $suggestion',
+              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Conseil personnalisé, rédigé par l'IA à partir des indicateurs (ou par
+/// règles si l'IA est indisponible). Demandé à la volée : réseau requis.
+class _AdviceCard extends ConsumerStatefulWidget {
+  const _AdviceCard();
+
+  @override
+  ConsumerState<_AdviceCard> createState() => _AdviceCardState();
+}
+
+class _AdviceCardState extends ConsumerState<_AdviceCard> {
+  String? _advice;
+  String? _source;
+  var _loading = false;
+
+  Future<void> _ask() async {
+    setState(() => _loading = true);
+    try {
+      final response = await ref
+          .read(dioProvider)
+          .post<Map<String, dynamic>>(ApiEndpoints.donorAdvice);
+      if (!mounted) return;
+      setState(() {
+        _advice = response.data?['advice'] as String?;
+        _source = response.data?['source'] as String?;
+      });
+    } on DioException {
+      if (mounted) {
+        showMessage(
+          context,
+          'Conseil indisponible hors ligne : les indicateurs ci-dessous '
+          'datent de la dernière synchronisation',
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: AppColors.primarySoft,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: AppColors.primary),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Conseil pour éviter le gaspillage',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _loading ? null : _ask,
+                  child: _loading
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(_advice == null ? 'Demander' : 'Actualiser'),
+                ),
+              ],
+            ),
+            if (_advice != null) ...[
+              const SizedBox(height: 4),
+              Text(_advice!),
+              const SizedBox(height: 4),
+              Text(
+                _source == 'ai'
+                    ? 'Rédigé par l’IA à partir de vos offres et de votre impact'
+                    : 'Calculé à partir de vos offres (IA indisponible)',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textMuted,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
