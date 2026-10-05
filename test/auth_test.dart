@@ -385,56 +385,65 @@ void main() {
       expect(container.read(authTokenProvider), 'jwt-awa@test.local');
     });
 
-    test('mot de passe inconnu de MySQL : message « Firebase injoignable »', () async {
-      firebase.down = true;
-      server.handler = (request) async =>
-          jsonResponse(401, {'error': 'Email ou mot de passe incorrect'});
+    test(
+      'mot de passe inconnu de MySQL : message « Firebase injoignable »',
+      () async {
+        firebase.down = true;
+        server.handler = (request) async =>
+            jsonResponse(401, {'error': 'Email ou mot de passe incorrect'});
 
-      await expectLater(
-        repository().login('awa@test.local', 'motdepasse1'),
-        throwsA(
-          isA<FirebaseAuthFailure>().having(
-            (e) => e.code,
-            'code',
-            'network-request-failed',
+        await expectLater(
+          repository().login('awa@test.local', 'motdepasse1'),
+          throwsA(
+            isA<FirebaseAuthFailure>().having(
+              (e) => e.code,
+              'code',
+              'network-request-failed',
+            ),
           ),
-        ),
-      );
-    });
+        );
+      },
+    );
 
-    test('inscription : compte local, recopié dans Firebase par le serveur', () async {
-      firebase.down = true;
-      server.handler = (request) async => jsonResponse(201, {
-        'user': {'status': 'pending'},
-      });
+    test(
+      'inscription : compte local, recopié dans Firebase par le serveur',
+      () async {
+        firebase.down = true;
+        server.handler = (request) async => jsonResponse(201, {
+          'user': {'status': 'pending'},
+        });
 
-      await repository().register(registration);
+        await repository().register(registration);
 
-      final body = bodyOf('/auth/register');
-      expect(body['email'], 'awa@test.local');
-      expect(body['password'], 'motdepasse1');
-      expect(body.containsKey('id_token'), isFalse);
-    });
+        final body = bodyOf('/auth/register');
+        expect(body['email'], 'awa@test.local');
+        expect(body['password'], 'motdepasse1');
+        expect(body.containsKey('id_token'), isFalse);
+      },
+    );
 
-    test('inscription : le serveur ne joint pas Firebase, compte local', () async {
-      server.handler = (request) async {
-        final body = jsonDecode(jsonEncode(request.data)) as Map;
-        return body.containsKey('id_token')
-            ? jsonResponse(503, {
-                'error': 'Firebase momentanément indisponible',
-                'details': {'code': 'firebase_unavailable'},
-              })
-            : jsonResponse(201, {
-                'user': {'status': 'pending'},
-              });
-      };
+    test(
+      'inscription : le serveur ne joint pas Firebase, compte local',
+      () async {
+        server.handler = (request) async {
+          final body = jsonDecode(jsonEncode(request.data)) as Map;
+          return body.containsKey('id_token')
+              ? jsonResponse(503, {
+                  'error': 'Firebase momentanément indisponible',
+                  'details': {'code': 'firebase_unavailable'},
+                })
+              : jsonResponse(201, {
+                  'user': {'status': 'pending'},
+                });
+        };
 
-      await repository().register(registration);
+        await repository().register(registration);
 
-      expect(bodyOf('/auth/register')['password'], 'motdepasse1');
-      expect(bodyOf('/auth/register').containsKey('id_token'), isFalse);
-      // Compte Firebase gardé : le serveur le rattache une fois activé.
-      expect(firebase.calls, isNot(contains('delete')));
-    });
+        expect(bodyOf('/auth/register')['password'], 'motdepasse1');
+        expect(bodyOf('/auth/register').containsKey('id_token'), isFalse);
+        // Compte Firebase gardé : le serveur le rattache une fois activé.
+        expect(firebase.calls, isNot(contains('delete')));
+      },
+    );
   });
 }

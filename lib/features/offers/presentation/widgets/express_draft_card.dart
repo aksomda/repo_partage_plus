@@ -40,7 +40,11 @@ class _ExpressDraftCardState extends ConsumerState<ExpressDraftCard> {
   Future<void> _fill() async {
     final text = _text.text.trim();
     if (text.length < 5) {
-      showMessage(context, 'Décrivez votre offre en quelques mots', error: true);
+      showMessage(
+        context,
+        'Décrivez votre offre en quelques mots',
+        error: true,
+      );
       return;
     }
     FocusScope.of(context).unfocus();

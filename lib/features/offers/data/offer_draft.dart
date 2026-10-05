@@ -50,7 +50,11 @@ final offerDraftRepositoryProvider = Provider<OfferDraftRepository>(
 
 /// Valeurs du formulaire tirées d'un brouillon : dates calculées à partir de
 /// [now] (l'IA ne renvoie que des heures « HH:MM » et un nombre de jours).
-typedef DraftDates = ({DateTime? expiry, DateTime? pickupStart, DateTime? pickupEnd});
+typedef DraftDates = ({
+  DateTime? expiry,
+  DateTime? pickupStart,
+  DateTime? pickupEnd,
+});
 
 DraftDates draftDates(Json draft, DateTime now) {
   final today = DateTime(now.year, now.month, now.day);
