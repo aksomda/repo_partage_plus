@@ -53,7 +53,7 @@ export const config = {
     secure: env.SMTP_SECURE === 'true',
     user: env.SMTP_USER || null,
     password: env.SMTP_PASSWORD || null,
-    from: env.MAIL_FROM || 'Partage+ <no-reply@partage-plus.local>',
+    from: env.MAIL_FROM || 'Partage+ <a.ksomda@gmail.com>',
   },
   // Envoi des e-mails : 'firebase' (extension Trigger Email, collection
   // Firestore) ou 'smtp'. Avec Firebase, SMTP sert de secours s'il est rempli.
@@ -62,6 +62,8 @@ export const config = {
     collection: env.MAIL_COLLECTION || 'mail',
     // Sans MAIL_FROM, l'extension utilise son expéditeur par défaut.
     from: env.MAIL_FROM || null,
+    // Adresse à laquelle arrivent les réponses des destinataires (les deux modes).
+    replyTo: env.MAIL_REPLY_TO || null,
   },
   // IA de recommandation intégrée au serveur (repli de la Cloud Function).
   rodium: {

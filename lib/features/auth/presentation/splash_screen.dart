@@ -101,8 +101,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                     ),
                     const SizedBox(height: 16),
                     OutlinedButton(
-                      onPressed: () => context.push(AppRoutes.register),
-                      child: const Text('S’inscrire'),
+                      onPressed: () => context.push(AppRoutes.login),
+                      child: const Text('Déjà un compte ? Se connecter'),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -110,12 +110,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         const Text(
-                          'Déjà un compte ?',
+                          'Vous n’avez pas de compte ?',
                           style: TextStyle(color: AppColors.textMuted),
                         ),
                         TextButton(
-                          onPressed: () => context.push(AppRoutes.login),
-                          child: const Text('Se connecter'),
+                          onPressed: () => context.push(AppRoutes.register),
+                          child: const Text('S’inscrire'),
                         ),
                       ],
                     ),

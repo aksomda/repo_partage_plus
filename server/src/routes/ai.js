@@ -3,11 +3,20 @@ import { z } from 'zod';
 
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
-import { optionalAuth } from '../http/auth.js';
+import { authenticate, optionalAuth } from '../http/auth.js';
 import { HttpError } from '../http/errors.js';
 import { id, latitude, longitude } from '../http/validation.js';
-import { InputError, LIMITS, ModelError, refineRecommendations } from '../services/ai_refine.js';
+import {
+  callRodium,
+  InputError,
+  LIMITS,
+  ModelError,
+  refineRecommendations,
+} from '../services/ai_refine.js';
+import { donorInsights } from '../services/insights.js';
+import { buildDraftMessages, DRAFT_LIMITS, parseDraft } from '../services/offer_draft.js';
 import { DISTANCE_KM, OFFER_AVAILABLE, PUBLISHER_TYPE } from '../services/offers.js';
+import { buildDashboard } from './impact.js';
 
 /**
  * IA de recommandation intégrée au serveur : repli de la Cloud Function
@@ -153,5 +162,121 @@ aiRouter.post('/refine', optionalAuth, async (req, res) => {
       throw new HttpError(503, 'Service d’IA indisponible', { code: 'ai_unavailable' });
     }
     throw error;
+  }
+});
+
+// ---------- Conseils au donateur ----------
+
+/** Conseil sans IA, à partir des indicateurs (repli toujours disponible). */
+export function ruleAdvice(insights, impact) {
+  if (insights.length === 0) {
+    return impact.pickups > 0
+      ? `Merci : ${impact.food_kg} kg de nourriture sauvés grâce à vous. Publiez vos prochains invendus dès qu’ils sont connus.`
+      : 'Publiez vos invendus dès qu’ils sont connus : plus le créneau est long, plus ils trouvent preneur.';
+  }
+  const [worst] = insights;
+  const tip = worst.suggestions[0] ?? 'Gardez un créneau de retrait large';
+  return `« ${worst.title} » présente le risque de gaspillage le plus élevé (${worst.risk}/100). ${tip}.`;
+}
+
+const ADVICE_SYSTEM = `Tu aides un donateur d'une application anti-gaspillage alimentaire en Afrique de l'Ouest (Burkina Faso).
+À partir des indicateurs fournis (risque de gaspillage de ses offres, raisons, suggestions, impact déjà obtenu), rédige en français
+un conseil court et concret : 3 phrases au maximum, sans liste ni titre, sans inventer de chiffres absents des données.`;
+
+// Conseil personnalisé rédigé par l'IA ; IA absente ou en panne : conseil
+// calculé par règles (jamais d'erreur pour l'utilisateur).
+aiRouter.post('/advice', authenticate, async (req, res) => {
+  const [insights, dashboard] = await Promise.all([
+    donorInsights(req.user.id),
+    buildDashboard(req.user.id),
+  ]);
+  const fallback = { advice: ruleAdvice(insights, dashboard.impact), source: 'rules', insights };
+  if (!config.rodium.apiKey) return res.json(fallback);
+
+  try {
+    checkRate(`advice:${req.user.id}`);
+    const content = await callRodium({
+      apiKey: config.rodium.apiKey,
+      model: config.rodium.model,
+      fetchImpl: fetchImpl ?? undefined,
+      messages: [
+        { role: 'system', content: ADVICE_SYSTEM },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            offres: insights.slice(0, 10).map((insight) => ({
+              titre: insight.title,
+              risque: insight.risk,
+              raisons: insight.reasons,
+              suggestions: insight.suggestions,
+            })),
+            impact: dashboard.impact,
+            social: dashboard.impact_social,
+          }),
+        },
+      ],
+    });
+    const advice = typeof content === 'string' ? content.trim().slice(0, 600) : '';
+    res.json(advice ? { advice, source: 'ai', insights } : fallback);
+  } catch (error) {
+    if (!(error instanceof ModelError) && !(error instanceof HttpError)) throw error;
+    console.warn('Conseil IA indisponible :', error.message);
+    res.json(fallback);
+  }
+});
+
+// ---------- Publication express (restaurateurs) ----------
+
+const draftSchema = z.object({
+  text: z.string().trim().min(5, 'Décrivez votre offre en quelques mots').max(DRAFT_LIMITS.text),
+  // Heure de l'appareil (« avant 20h », « ce soir ») : le serveur ignore son fuseau.
+  local_time: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .optional(),
+});
+
+/** Réservé aux comptes dont l'acteur est « restaurateur ». */
+async function requireRestaurateur(req) {
+  const [row] = await query(
+    'SELECT a.code FROM users u LEFT JOIN actors a ON a.id = u.actor_id WHERE u.id = ?',
+    [req.user.id],
+  );
+  if (row?.code !== 'restaurateur') {
+    throw new HttpError(403, 'Publication express réservée aux restaurateurs');
+  }
+}
+
+// Brouillon d'offre à partir d'une description libre ; rien n'est publié.
+// IA absente ou en panne : 503, le formulaire classique reste utilisable.
+aiRouter.post('/offer-draft', authenticate, async (req, res) => {
+  await requireRestaurateur(req);
+  const data = draftSchema.parse(req.body);
+  if (!config.rodium.apiKey) {
+    throw new HttpError(503, 'IA non configurée sur le serveur', { code: 'ai_not_configured' });
+  }
+  checkRate(`draft:${req.user.id}`);
+
+  const categories = await query('SELECT id, name FROM categories ORDER BY name');
+  try {
+    const content = await callRodium({
+      apiKey: config.rodium.apiKey,
+      model: config.rodium.model,
+      fetchImpl: fetchImpl ?? undefined,
+      messages: buildDraftMessages({
+        text: data.text,
+        categories,
+        localTime: data.local_time,
+      }),
+    });
+    const draft = parseDraft(
+      content,
+      categories.map((category) => category.id),
+    );
+    res.json({ draft, source: 'ai' });
+  } catch (error) {
+    if (!(error instanceof ModelError)) throw error;
+    console.warn('Brouillon IA indisponible :', error.message);
+    throw new HttpError(503, 'Service d’IA indisponible', { code: 'ai_unavailable' });
   }
 });

@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Téléphone branché en USB : lancer d'abord `adb reverse tcp:3000 tcp:3000`.
+      "name": "Téléphone (USB, API locale)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": ["--dart-define=API_BASE_URL=http://localhost:3000/api"]
+    },
+    {
+      // Émulateur Android : l'API du PC est vue via 10.0.2.2 (valeur par défaut).
+      "name": "Émulateur Android",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart"
+    }
+  ]
+}

@@ -4,10 +4,14 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
+import 'package:repo_partage_plus/features/impact/data/impact_repository.dart';
+import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
+import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
 /// Accueil : offres à proximité du point de départ, accessible sans compte.
 class HomeScreen extends ConsumerStatefulWidget {
@@ -36,7 +40,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandLogo(size: 20, showTagline: false),
+        // Sans compte : le logo ramène à l'écran d'accueil du démarrage.
+        title: loggedIn
+            ? const BrandLogo(size: 20, showTagline: false)
+            : Tooltip(
+                message: 'Retour à l’accueil',
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppTheme.radius),
+                  onTap: () => context.go(AppRoutes.splash),
+                  child: const BrandLogo(size: 20, showTagline: false),
+                ),
+              ),
         actions: [
           IconButton(
             tooltip: 'Recommandations',
@@ -57,7 +71,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           if (loggedIn)
             IconButton(
               tooltip: 'Notifications',
-              icon: const Icon(Icons.notifications_none),
+              icon: Badge.count(
+                count: ref.watch(unreadFeedCountProvider),
+                isLabelVisible: ref.watch(unreadFeedCountProvider) > 0,
+                child: const Icon(Icons.notifications_none),
+              ),
               onPressed: () => context.push(AppRoutes.notifications),
             )
           else
@@ -81,13 +99,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class _Banner extends StatelessWidget {
+class _Banner extends ConsumerWidget {
   const _Banner({required this.loggedIn});
 
   final bool loggedIn;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final impact = ref.watch(publicImpactProvider);
+    final saved = (impact?['food_kg'] as num?) ?? 0;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       padding: const EdgeInsets.all(20),
@@ -109,6 +129,11 @@ class _Banner extends StatelessWidget {
               height: 1.2,
             ),
           ),
+          // Rien de sauvé encore : pas de compteurs à zéro, peu engageants.
+          if (impact != null && saved > 0) ...[
+            const SizedBox(height: 12),
+            _PlatformCounters(impact: impact),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -158,6 +183,66 @@ class _Banner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Ce que la communauté Partage+ a déjà sauvé (toute la plateforme).
+class _PlatformCounters extends StatelessWidget {
+  const _PlatformCounters({required this.impact});
+
+  final Json impact;
+
+  @override
+  Widget build(BuildContext context) {
+    num value(String key) => impact[key] as num? ?? 0;
+    final counters = [
+      (Icons.restaurant, formatNumber(value('meals')), 'repas'),
+      (Icons.scale_outlined, formatNumber(value('food_kg')), 'kg sauvés'),
+      (Icons.cloud_outlined, formatNumber(value('co2_kg')), 'kg CO₂ évités'),
+      if (value('users') > 0)
+        (Icons.groups_outlined, formatNumber(value('users')), 'membres'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Ensemble, nous avons déjà sauvé :',
+          style: TextStyle(color: Colors.white70),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final (icon, number, label) in counters)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(AppTheme.radius),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 16, color: Colors.white),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$number $label',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

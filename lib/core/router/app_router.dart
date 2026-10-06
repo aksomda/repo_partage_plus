@@ -4,13 +4,19 @@ import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
+import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_impact_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_manage_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_reservations_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/association_validation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/categories_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/factors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/offer_moderation_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/settings_screen.dart';
+import 'package:repo_partage_plus/features/auth/presentation/forgot_password_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/login_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/profile_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/register_screen.dart';
@@ -21,6 +27,7 @@ import 'package:repo_partage_plus/features/discovery/presentation/location_picke
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
 import 'package:repo_partage_plus/features/impact/presentation/impact_screen.dart';
+import 'package:repo_partage_plus/features/notifications/presentation/conversation_screen.dart';
 import 'package:repo_partage_plus/features/notifications/presentation/notifications_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/create_offer_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/my_offers_screen.dart';
@@ -32,20 +39,29 @@ import 'package:repo_partage_plus/features/reservations/presentation/reserve_scr
 import 'package:repo_partage_plus/features/reservations/presentation/reservation_confirmation_screen.dart';
 
 /// [isLoggedIn] : null (tests) = aucune redirection vers la connexion.
+/// [isAdmin] : null tant que le profil n'est pas connu (pas de redirection) ;
+/// false : les écrans d'administration renvoient à l'accueil.
 GoRouter createRouter({
   String initialLocation = AppRoutes.splash,
   bool Function()? isLoggedIn,
+  bool? Function()? isAdmin,
   Listenable? refreshListenable,
 }) {
   return GoRouter(
     initialLocation: initialLocation,
     refreshListenable: refreshListenable,
     redirect: (context, state) {
-      if (isLoggedIn == null || isLoggedIn()) return null;
+      if (isLoggedIn == null) return null;
       final path = state.uri.path;
-      return AppRoutes.requiresLogin(path)
-          ? AppRoutes.loginThen(state.uri.toString())
-          : null;
+      if (!isLoggedIn()) {
+        return AppRoutes.requiresLogin(path)
+            ? AppRoutes.loginThen(state.uri.toString())
+            : null;
+      }
+      if (AppRoutes.requiresAdmin(path) && isAdmin?.call() == false) {
+        return AppRoutes.home;
+      }
+      return null;
     },
     routes: [
       // Auth
@@ -67,6 +83,12 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.verifyEmail,
         builder: (context, state) => VerifyEmailScreen(
+          initialEmail: state.uri.queryParameters['email'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.forgotPassword,
+        builder: (context, state) => ForgotPasswordScreen(
           initialEmail: state.uri.queryParameters['email'] ?? '',
         ),
       ),
@@ -108,6 +130,12 @@ GoRouter createRouter({
             OfferDetailScreen(offerId: state.pathParameters['id']!),
       ),
       GoRoute(
+        path: AppRoutes.editOfferPattern,
+        builder: (context, state) => CreateOfferScreen(
+          offerId: int.tryParse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.reservePattern,
         builder: (context, state) =>
             ReserveScreen(offerId: int.parse(state.pathParameters['id']!)),
@@ -134,6 +162,12 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.notifications,
         builder: (context, state) => const NotificationsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.conversationPattern,
+        builder: (context, state) => ConversationScreen(
+          userId: int.parse(state.pathParameters['userId']!),
+        ),
       ),
       GoRoute(
         path: AppRoutes.impact,
@@ -173,6 +207,22 @@ GoRouter createRouter({
         path: AppRoutes.adminActors,
         builder: (context, state) => const ActorsScreen(),
       ),
+      GoRoute(
+        path: AppRoutes.adminSettings,
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminReservations,
+        builder: (context, state) => const AdminReservationsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminImpact,
+        builder: (context, state) => const AdminImpactScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminManage,
+        builder: (context, state) => const AdminManageScreen(),
+      ),
     ],
   );
 }
@@ -185,10 +235,16 @@ class _SessionListenable extends ChangeNotifier {
 final routerProvider = Provider<GoRouter>((ref) {
   final session = _SessionListenable();
   ref.listen(authTokenProvider, (_, _) => session.changed());
+  // Rôle connu ou changé : les droits sur les écrans sont réévalués.
+  ref.listen(profileProvider, (_, _) => session.changed());
   ref.onDispose(session.dispose);
 
   final router = createRouter(
     isLoggedIn: () => ref.read(authTokenProvider) != null,
+    isAdmin: () {
+      final profile = ref.read(profileProvider);
+      return profile == null ? null : profile['role'] == 'admin';
+    },
     refreshListenable: session,
   );
   ref.onDispose(router.dispose);

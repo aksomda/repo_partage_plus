@@ -361,7 +361,7 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final km in searchRadii)
+                    for (final km in searchRadii.where((km) => km.isFinite))
                       ChoiceChip(
                         label: Text('${km.round()} km'),
                         selected: prefs.maxDistanceKm == km,

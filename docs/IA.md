@@ -101,6 +101,26 @@ local. Serveur : renseigner `RODIUM_API_KEY` dans `server/.env` (et sur Render).
 La fonction est déployée en `europe-west1` (même région dans l'application :
 `CloudFunctionAiRefiner.region`).
 
+## Publication express (restaurateurs)
+
+En haut de « Publier une offre », les comptes **restaurateur** (acteur
+`restaurateur`) voient une carte « Publication express » : ils décrivent leurs
+invendus en une phrase (texte ou dictée), par exemple « 5 plats de riz gras,
+gratuit, avant 20h », et le formulaire est pré-rempli : catégorie, titre,
+description, quantité, unité, poids, prix, DLC, créneau. **Rien n'est publié** :
+le restaurateur relit, corrige, puis publie comme d'habitude.
+
+- Route : `POST /api/recommendations/offer-draft` (`server/src/services/offer_draft.js`),
+  refusée (403) aux autres acteurs, même plafond `AI_CALLS_PER_HOUR`.
+- L'application envoie le texte et son heure locale ; le modèle ne renvoie
+  que des heures « HH:MM » et un nombre de jours, convertis en dates sur
+  l'appareil (`draftDates`).
+- Réponse contrôlée : catégorie prise dans la liste MySQL (sinon ignorée),
+  quantité, poids, prix et DLC bornés, textes tronqués ; un champ douteux est
+  laissé tel quel dans le formulaire.
+- IA absente, en panne ou quota atteint : message, et le formulaire classique
+  reste utilisable.
+
 ## Sécurité et confidentialité
 
 - La clé RodiumAI reste côté serveur (Secret Manager). L'application n'appelle que

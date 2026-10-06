@@ -10,6 +10,7 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/features/pickup/domain/pickup_qr.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
 /// Provider pour récupérer la réservation concernée (reçue ou personnelle) par son ID.
@@ -57,13 +58,6 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
     super.dispose();
   }
 
-  /// Extrait un code à 6 chiffres d'une chaîne scannée (raw string ou JSON).
-  String? _extractCode(String raw) {
-    final clean = raw.trim();
-    final match = RegExp(r'\b\d{6}\b').firstMatch(clean);
-    return match?.group(0);
-  }
-
   Future<void> _submitPickup(Json reservation, String pickupCode) async {
     if (_loading) return;
 
@@ -104,7 +98,7 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
       final rawValue = barcode.rawValue;
       if (rawValue == null) continue;
 
-      final code = _extractCode(rawValue);
+      final code = pickupCodeFromQr(rawValue, reservationId: reservation['id']);
       if (code != null) {
         _codeController.text = code;
         _submitPickup(reservation, code);

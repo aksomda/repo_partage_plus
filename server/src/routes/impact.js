@@ -7,8 +7,24 @@ import { firestoreMirror } from '../services/firestore_mirror.js';
 
 export const impactRouter = Router();
 
-/** Poids sauvé par une réservation : part du poids de l'offre réservée. */
-const SAVED_KG = 'o.weight_kg * r.quantity / o.initial_quantity';
+/**
+ * Poids estimé d'une unité quand le publieur n'a pas indiqué le poids :
+ * une portion, une pièce, un sachet… (repère FAO : ~400 g par repas).
+ */
+export const DEFAULT_UNIT_KG = 0.4;
+
+/**
+ * Poids sauvé par une réservation : part du poids de l'offre réservée ;
+ * poids inconnu : estimé d'après l'unité (kg ou litre, gramme, sinon
+ * [DEFAULT_UNIT_KG] par unité).
+ */
+const SAVED_KG = `(CASE
+  WHEN o.weight_kg IS NOT NULL THEN o.weight_kg * r.quantity / o.initial_quantity
+  WHEN LOWER(TRIM(o.unit)) IN ('kg', 'kgs', 'kilo', 'kilos', 'kilogramme', 'kilogrammes',
+                               'l', 'litre', 'litres') THEN r.quantity
+  WHEN LOWER(TRIM(o.unit)) IN ('g', 'gramme', 'grammes') THEN r.quantity / 1000
+  ELSE r.quantity * ${DEFAULT_UNIT_KG}
+END)`;
 
 /** Mesures communes : retraits, produits, kg, CO2 et repas. */
 const MEASURES = `
@@ -16,7 +32,8 @@ const MEASURES = `
   COALESCE(SUM(r.quantity), 0) AS items,
   COALESCE(SUM(${SAVED_KG}), 0) AS food_kg,
   COALESCE(SUM(${SAVED_KG} * COALESCE(f.co2_kg_per_kg, 0)), 0) AS co2_kg,
-  COALESCE(SUM(${SAVED_KG} * COALESCE(f.meals_per_kg, 0)), 0) AS meals`;
+  COALESCE(SUM(${SAVED_KG} * COALESCE(f.meals_per_kg, 0)), 0) AS meals,
+  COALESCE(SUM(o.weight_kg IS NULL), 0) AS estimated_pickups`;
 
 const PICKED_UP = `
   FROM reservations r
@@ -41,6 +58,8 @@ export function formatImpact(row) {
     food_kg: round1(row.food_kg),
     co2_kg: round1(row.co2_kg),
     meals: Math.round(Number(row.meals)),
+    // Retraits dont le poids est estimé d'après l'unité (poids non indiqué).
+    estimated_pickups: Number(row.estimated_pickups ?? 0),
   };
 }
 
@@ -194,13 +213,81 @@ impactRouter.get('/me/monthly', authenticate, async (req, res) => {
   res.json(await monthly(MINE, [req.user.id, req.user.id], new Date()));
 });
 
+/**
+ * Indicateurs sociaux de toute la plateforme : personnes aidées (comptes et
+ * invités), associations soutenues, donateurs actifs, part des dons gratuits.
+ */
+async function globalSocial() {
+  const [[pickups], [offers]] = await Promise.all([
+    query(
+      `SELECT COUNT(DISTINCT COALESCE(CONCAT('u', r.beneficiary_id), CONCAT('g', r.guest_phone)))
+                AS people_helped,
+              COUNT(DISTINCT CASE WHEN b.role = 'association' THEN b.id END) AS associations_supported,
+              COUNT(DISTINCT COALESCE(CONCAT('u', o.donor_id), CONCAT('g', o.guest_phone)))
+                AS active_donors,
+              COUNT(*) AS pickups,
+              COALESCE(SUM(r.amount = 0), 0) AS free_pickups
+       FROM reservations r
+       JOIN offers o ON o.id = r.offer_id
+       LEFT JOIN users b ON b.id = r.beneficiary_id
+       WHERE r.status = 'picked_up'`,
+    ),
+    query(
+      `SELECT COUNT(*) AS offers_shared,
+              COALESCE(SUM(status = 'completed'), 0) AS offers_completed,
+              COALESCE(SUM(status = 'expired'), 0) AS offers_expired
+       FROM offers WHERE status IN ('published', 'reserved', 'completed', 'expired')`,
+    ),
+  ]);
+  const count = (value) => Number(value ?? 0);
+  const closed = count(offers.offers_completed) + count(offers.offers_expired);
+  return {
+    people_helped: count(pickups.people_helped),
+    associations_supported: count(pickups.associations_supported),
+    active_donors: count(pickups.active_donors),
+    offers_shared: count(offers.offers_shared),
+    // Part des retraits gratuits, et des offres clôturées écoulées (en %).
+    free_share: count(pickups.pickups) === 0
+      ? 0
+      : Math.round((100 * count(pickups.free_pickups)) / count(pickups.pickups)),
+    completion_rate: closed === 0 ? 0 : Math.round((100 * count(offers.offers_completed)) / closed),
+  };
+}
+
+/**
+ * Impact de toute la plateforme (écran « Impact » de l'administrateur) :
+ * totaux, évolution sur 12 mois, répartition par catégorie et indicateurs
+ * sociaux.
+ */
+export async function buildGlobalImpact(now = new Date()) {
+  const [[totals], [users], months, categories, social] = await Promise.all([
+    query(IMPACT_SELECT),
+    query("SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'"),
+    monthly('', [], now),
+    byCategory('', []),
+    globalSocial(),
+  ]);
+  return {
+    as_of: now.toISOString(),
+    impact: { ...formatImpact(totals), users: Number(users.count) },
+    monthly: months,
+    by_category: categories,
+    social,
+  };
+}
+
+/** Compteurs de toute la plateforme (accueil, avec ou sans compte). */
+export async function publicImpact() {
+  const [[row], [users]] = await Promise.all([
+    query(IMPACT_SELECT),
+    query("SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'"),
+  ]);
+  return { ...formatImpact(row), users: Number(users.count) };
+}
+
 // Impact global de la plateforme (public, pour l'écran d'accueil et la démo).
 impactRouter.get('/global', async (req, res) => {
-  const [row] = await query(IMPACT_SELECT);
-  const [users] = await query(
-    "SELECT COUNT(*) AS count FROM users WHERE status = 'active' AND role <> 'admin'",
-  );
-  res.json({ ...formatImpact(row), users: Number(users.count) });
+  res.json(await publicImpact());
 });
 
 // Répartition par catégorie, plateforme entière (tableau de bord web).

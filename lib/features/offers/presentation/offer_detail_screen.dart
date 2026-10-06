@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import 'package:repo_partage_plus/core/countries/countries.dart';
+import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/location/geo.dart';
 import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/maps/osmand_button.dart';
@@ -10,6 +13,8 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
+import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
+import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 import 'package:repo_partage_plus/features/recommendations/data/preferences.dart';
@@ -28,7 +33,10 @@ class OfferDetailScreen extends ConsumerWidget {
         : ref.watch(offerDetailProvider(id));
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Détail de l'offre")),
+      appBar: AppBar(
+        title: const Text("Détail de l'offre"),
+        actions: [if (id != null) _FavoriteButton(offerId: id)],
+      ),
       body: offer.when(
         data: (data) => _Details(offer: data),
         loading: () => const Center(child: CircularProgressIndicator()),
@@ -73,8 +81,13 @@ class _DetailsState extends ConsumerState<_Details> {
     final profile = ref.watch(profileProvider);
     final price = offer['price'] as num? ?? 0;
     final available = isOfferAvailable(offer, DateTime.now());
-    final own = profile != null && profile['id'] == offer['donor_id'];
-    final isGuestOffer = offer['is_guest'] == 1 || offer['is_guest'] == true;
+    final guestOffer = isGuestOffer(offer);
+    // Publiée par ce compte, ou sans compte depuis cet appareil.
+    final own = guestOffer
+        ? (ref.watch(guestOffersProvider).value ?? const []).any(
+            (item) => item['id'] == offer['id'],
+          )
+        : profile != null && profile['id'] == offer['donor_id'];
 
     final km = origin == null
         ? null
@@ -119,7 +132,8 @@ class _DetailsState extends ConsumerState<_Details> {
                     _Line(
                       Icons.storefront_outlined,
                       '${offer['donor_name'] ?? ''}'
-                      '${isGuestOffer ? ' (sans compte)' : ''}',
+                      '${guestOffer ? ' (sans compte)' : ''}'
+                      '${_countryLabel(offer)}',
                     ),
                     if (km != null)
                       _Line(
@@ -148,7 +162,8 @@ class _DetailsState extends ConsumerState<_Details> {
                     _Line(
                       Icons.inventory_2_outlined,
                       '${offer['quantity_available']} ${offer['unit']}(s) '
-                      'disponible(s) · ${offer['weight_kg']} kg au total',
+                      'disponible(s)'
+                      '${offer['weight_kg'] == null ? '' : ' · ${offer['weight_kg']} kg au total'}',
                     ),
                     _Line(
                       Icons.event_outlined,
@@ -156,8 +171,18 @@ class _DetailsState extends ConsumerState<_Details> {
                       color: AppColors.accent,
                     ),
                     _Line(Icons.category_outlined, '${offer['category_name']}'),
-                    const _Section('Créneau de retrait'),
-                    _Line(Icons.schedule, formatPickup(offer)),
+                    if (offerSlots(offer) case final slots
+                        when slots.length > 1) ...[
+                      _Section('Créneaux de retrait (${slots.length})'),
+                      for (final slot in slots)
+                        _Line(
+                          Icons.schedule,
+                          formatPeriod(slot.start, slot.end),
+                        ),
+                    ] else ...[
+                      const _Section('Créneau de retrait'),
+                      _Line(Icons.schedule, formatPickup(offer)),
+                    ],
                     _Line(Icons.location_on_outlined, '${offer['address']}'),
                     const SizedBox(height: 8),
                     OsmAndButton(
@@ -183,11 +208,12 @@ class _DetailsState extends ConsumerState<_Details> {
                         ),
                       ),
                     ],
-                    if (isGuestOffer && phone != null) ...[
+                    if (guestOffer && phone != null) ...[
                       const _Section('Contact du donateur'),
                       _Line(Icons.phone_outlined, phone),
                       const Text(
-                        'Publiée sans compte : convenez du retrait par téléphone.',
+                        'Publiée sans compte : cette offre ne se réserve pas, '
+                        'appelez le donateur pour convenir du retrait.',
                         style: TextStyle(
                           color: AppColors.textMuted,
                           fontSize: 12,
@@ -207,17 +233,42 @@ class _DetailsState extends ConsumerState<_Details> {
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
               child: SizedBox(
                 width: double.infinity,
-                child: FilledButton(
-                  onPressed: () =>
-                      context.push(AppRoutes.reserve(offer['id'] as int)),
-                  child: const Text('Réserver'),
-                ),
+                child: guestOffer
+                    ? FilledButton.icon(
+                        onPressed: phone == null
+                            ? null
+                            : () => _call(context, phone),
+                        icon: const Icon(Icons.call),
+                        label: const Text('Appeler le donateur'),
+                      )
+                    : FilledButton(
+                        onPressed: () =>
+                            context.push(AppRoutes.reserve(offer['id'] as int)),
+                        child: const Text('Réserver'),
+                      ),
               ),
             ),
           ),
       ],
     );
   }
+}
+
+/// Ouvre le composeur téléphonique sur le numéro du donateur.
+Future<void> _call(BuildContext context, String phone) async {
+  final uri = Uri(scheme: 'tel', path: phone.replaceAll(' ', ''));
+  final launched = await launchUrl(uri).catchError((_) => false);
+  if (!launched && context.mounted) {
+    showMessage(context, 'Appel impossible : composez le $phone', error: true);
+  }
+}
+
+/// « · 🇧🇫 Burkina Faso » : pays du publieur, s'il est connu.
+String _countryLabel(Json offer) {
+  final name = offer['country_name'] as String?;
+  if (name == null) return '';
+  final flag = countryByCode(offer['country_code'] as String?)?.flag;
+  return ' · ${flag == null ? '' : '$flag '}$name';
 }
 
 class _Line extends StatelessWidget {
@@ -258,6 +309,29 @@ class _Section extends StatelessWidget {
         title,
         style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
       ),
+    );
+  }
+}
+
+/// Ajoute ou retire l'offre des favoris (sans compte aussi).
+class _FavoriteButton extends ConsumerWidget {
+  const _FavoriteButton({required this.offerId});
+
+  final int offerId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final favorite = ref.watch(
+      favoritesProvider.select((f) => f.offerIds.contains(offerId)),
+    );
+    return IconButton(
+      tooltip: favorite ? 'Retirer des favoris' : 'Ajouter aux favoris',
+      icon: Icon(
+        favorite ? Icons.favorite : Icons.favorite_border,
+        color: favorite ? AppColors.danger : null,
+      ),
+      onPressed: () =>
+          ref.read(favoritesProvider.notifier).toggleOffer(offerId),
     );
   }
 }

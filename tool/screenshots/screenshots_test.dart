@@ -369,7 +369,7 @@ Future<void> _shot(
         ...overrides,
         authGatewayProvider.overrideWithValue(FakeAuthGateway()),
         signupActorsProvider.overrideWith((ref) async => _signupActors),
-        adminUsersProvider.overrideWith((ref, filters) async => _users),
+        adminUsersProvider.overrideWithValue(_users),
         aiRefinerProvider.overrideWithValue(_DemoAi()),
       ],
       child: MaterialApp.router(

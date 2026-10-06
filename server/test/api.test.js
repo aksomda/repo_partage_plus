@@ -14,10 +14,11 @@ const { migrate } = await import('../src/db/migrate.js');
 const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
+const { syncFirebaseAccounts } = await import('../src/services/firebase_sync.js');
 const { purgeFirebaseMails, sentMails, setMailStore } = await import(
   '../src/services/mailer.js'
 );
-const { flushFirestoreMirror, setFirestoreStore } = await import(
+const { firestoreMirror, flushFirestoreMirror, setFirestoreStore } = await import(
   '../src/services/firestore_mirror.js'
 );
 const { config } = await import('../src/config.js');
@@ -25,10 +26,13 @@ const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js')
 const { HttpError } = await import('../src/http/errors.js');
 const { fillMonths, MONTHS } = await import('../src/routes/impact.js');
 const { isDatabaseUnavailable } = await import('../src/db/pool.js');
+const { setPushSender } = await import('../src/services/push.js');
+const { resetLoginAttempts, MAX_FAILURES } = await import('../src/http/login_attempts.js');
 
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
 const firebaseCalls = [];
-setFirebaseGateway({
+const firebaseUsers = new Map();
+const fakeFirebase = {
   async verifyIdToken(idToken) {
     const [prefix, uid, email] = idToken.split(':');
     if (prefix !== 'fake') throw new HttpError(401, 'Session Firebase invalide ou expirée');
@@ -40,7 +44,25 @@ setFirebaseGateway({
   async markEmailVerified(uid) {
     firebaseCalls.push(['verified', uid]);
   },
-});
+  async setPassword(uid, password) {
+    firebaseCalls.push(['password', uid, password]);
+  },
+  async createUser({ email }) {
+    firebaseCalls.push(['created', email]);
+    return `uid-${email}`;
+  },
+  // Comptes Firebase connus du faux Firebase (inscriptions interrompues).
+  async findUserByEmail(email) {
+    return firebaseUsers.get(email) ?? null;
+  },
+  async deleteUser(uid) {
+    firebaseCalls.push(['deleted', uid]);
+    for (const [email, user] of firebaseUsers) {
+      if (user.uid === uid) firebaseUsers.delete(email);
+    }
+  },
+};
+setFirebaseGateway(fakeFirebase);
 
 // Faux Firestore : documents gardés en mémoire, par collection puis par id.
 const firestoreDocs = {};
@@ -57,6 +79,9 @@ setFirestoreStore({
   },
   async readDoc(collection, id) {
     return firestoreCollection(collection).get(Number(id)) ?? null;
+  },
+  async readAll(collection) {
+    return [...firestoreCollection(collection).values()];
   },
   async readState() {
     return null;
@@ -198,7 +223,7 @@ describe('authentification', () => {
     assert.equal(res.status, 200);
     assert.deepEqual(
       res.body.map((actor) => actor.code).sort(),
-      ['commercant', 'particulier', 'restaurateur'],
+      ['association', 'commercant', 'particulier', 'restaurateur'],
     );
   });
 
@@ -316,6 +341,43 @@ describe('authentification', () => {
     assert.equal(res.body.role, 'donor');
     assert.equal(res.body.actor_code, 'commercant');
   });
+
+  test('mot de passe oublié : code par e-mail, nouveau mot de passe dans Firebase', async () => {
+    const unknown = await api
+      .post('/api/auth/password/forgot')
+      .send({ email: 'inconnu@test.local' });
+    assert.equal(unknown.status, 204);
+
+    const sent = await api
+      .post('/api/auth/password/forgot')
+      .send({ email: 'nouveau@test.local' });
+    assert.equal(sent.status, 204);
+    const code = lastCode('nouveau@test.local');
+    assert.match(sentMails.at(-1).subject, /réinitialisation/);
+
+    const weak = await api
+      .post('/api/auth/password/reset')
+      .send({ email: 'nouveau@test.local', code, password: 'court' });
+    assert.equal(weak.status, 400);
+
+    const wrong = await api
+      .post('/api/auth/password/reset')
+      .send({ email: 'nouveau@test.local', code: code === '000000' ? '111111' : '000000', password: 'nouveau123' });
+    assert.equal(wrong.status, 400);
+    assert.equal(wrong.body.details.code, 'otp_invalid');
+
+    const res = await api
+      .post('/api/auth/password/reset')
+      .send({ email: 'nouveau@test.local', code, password: 'nouveau123' });
+    assert.equal(res.status, 204, res.text);
+    assert.deepEqual(firebaseCalls.at(-1), ['password', 'uid-nouveau', 'nouveau123']);
+
+    // Code à usage unique.
+    const again = await api
+      .post('/api/auth/password/reset')
+      .send({ email: 'nouveau@test.local', code, password: 'nouveau123' });
+    assert.equal(again.status, 400);
+  });
 });
 
 describe('parcours offre → réservation → retrait', () => {
@@ -323,7 +385,7 @@ describe('parcours offre → réservation → retrait', () => {
   let reservationId;
   let pickupCode;
 
-  test('le donateur publie une offre, en attente de modération', async () => {
+  test('le donateur publie une offre, visible tout de suite', async () => {
     const [category] = (await api.get('/api/categories')).body;
     const res = await api
       .post('/api/offers')
@@ -339,13 +401,49 @@ describe('parcours offre → réservation → retrait', () => {
         address: '1 rue du Test',
         latitude: 12.3714,
         longitude: -1.5197,
+        contact_email: 'Donateur@Test.local',
+        country_code: 'bf',
+        country_name: 'Burkina Faso',
       });
     assert.equal(res.status, 201, res.text);
-    assert.equal(res.body.status, 'pending');
+    assert.equal(res.body.status, 'published');
+    assert.equal(res.body.country_code, 'BF');
+    assert.equal(res.body.country_name, 'Burkina Faso');
+    // L'e-mail de contact n'est rendu qu'au publieur.
+    assert.equal(res.body.contact_email, 'donateur@test.local');
     offerId = res.body.id;
 
     const list = await api.get('/api/offers?limit=100');
-    assert.ok(!list.body.some((offer) => offer.id === offerId));
+    const listed = list.body.find((offer) => offer.id === offerId);
+    assert.ok(listed);
+    assert.equal(listed.contact_email, undefined);
+    const detail = await api.get(`/api/offers/${offerId}`);
+    assert.equal(detail.body.contact_email, undefined);
+  });
+
+  test('poids total facultatif, e-mail de contact vérifié', async () => {
+    const [category] = (await api.get('/api/categories')).body;
+    const body = {
+      category_id: category.id,
+      title: 'Sans poids',
+      quantity: 1,
+      weight_kg: '',
+      expiry_date: tomorrow(),
+      pickup_start: futureIso(-1),
+      pickup_end: futureIso(5),
+      address: '1 rue du Test',
+      latitude: 12.3714,
+      longitude: -1.5197,
+    };
+    const res = await api.post('/api/offers').set(as('donor')).send(body);
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.weight_kg, null);
+
+    const badEmail = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send({ ...body, contact_email: 'pas-un-email' });
+    assert.equal(badEmail.status, 400);
   });
 
   test('une offre incomplète est refusée', async () => {
@@ -353,16 +451,9 @@ describe('parcours offre → réservation → retrait', () => {
     assert.equal(res.status, 400);
   });
 
-  test("l'admin valide l'offre, qui apparaît à proximité", async () => {
-    const pending = await api.get('/api/admin/offers').set(as('admin'));
-    assert.ok(pending.body.some((offer) => offer.id === offerId));
-
-    const res = await api
-      .patch(`/api/admin/offers/${offerId}/moderation`)
-      .set(as('admin'))
-      .send({ decision: 'approve' });
-    assert.equal(res.status, 200, res.text);
-    assert.equal(res.body.status, 'published');
+  test("l'offre apparaît à proximité et dans la liste de l'admin", async () => {
+    const visible = await api.get('/api/admin/offers').set(as('admin'));
+    assert.ok(visible.body.some((offer) => offer.id === offerId));
 
     const nearby = await api.get('/api/offers/nearby?lat=12.3714&lng=-1.5197&radius_km=1');
     const found = nearby.body.find((offer) => offer.id === offerId);
@@ -542,14 +633,6 @@ describe('invités (sans compte) et paiement hors application', () => {
     ...overrides,
   });
 
-  async function approve(offerId) {
-    const res = await api
-      .patch(`/api/admin/offers/${offerId}/moderation`)
-      .set(as('admin'))
-      .send({ decision: 'approve' });
-    assert.equal(res.status, 200, res.text);
-  }
-
   before(async () => {
     [{ id: categoryId }] = (await api.get('/api/categories')).body;
   });
@@ -574,13 +657,17 @@ describe('invités (sans compte) et paiement hors application', () => {
     assert.equal(doc.guest_first_name, 'Moussa');
     assert.equal(doc.guest_last_name, 'Kaboré');
     assert.equal(doc.guest_phone, guest.phone);
-    assert.equal(doc.status, 'pending');
+    assert.equal(doc.status, 'published');
     assert.equal(doc.quantity_available, 4);
 
-    // La modération est répercutée sur la copie.
-    await approve(res.body.id);
+    // Le retrait par l'administrateur est répercuté sur la copie.
+    const withdrawn = await api
+      .patch(`/api/admin/offers/${res.body.id}/moderation`)
+      .set(as('admin'))
+      .send({ decision: 'reject', reason: 'Abus' });
+    assert.equal(withdrawn.status, 200, withdrawn.text);
     await flushFirestoreMirror();
-    assert.equal(firestoreCollection('offers').get(res.body.id).status, 'published');
+    assert.equal(firestoreCollection('offers').get(res.body.id).status, 'rejected');
   });
 
   test('photo jointe : enregistrée, servie, refusée si ce n’est pas une image', async () => {
@@ -611,7 +698,7 @@ describe('invités (sans compte) et paiement hors application', () => {
 
     const res = await api.post('/api/offers').send(offerBody({ guest }));
     assert.equal(res.status, 201, res.text);
-    assert.equal(res.body.status, 'pending');
+    assert.equal(res.body.status, 'published');
     assert.equal(res.body.donor_id, null);
     assert.equal(res.body.is_guest, 1);
     assert.equal(res.body.donor_name, 'Moussa Kaboré');
@@ -620,8 +707,8 @@ describe('invités (sans compte) et paiement hors application', () => {
     assert.ok(res.body.guest_token.length > 20);
     guestOffer = res.body;
 
-    // Offre en modération : visible par son auteur (jeton), pas par les autres.
-    assert.equal((await api.get(`/api/offers/${guestOffer.id}`)).status, 404);
+    // Visible de tous tout de suite ; le jeton n'est jamais renvoyé.
+    assert.equal((await api.get(`/api/offers/${guestOffer.id}`)).status, 200);
     const own = await api
       .get(`/api/offers/${guestOffer.id}`)
       .set('X-Guest-Token', guestOffer.guest_token);
@@ -647,8 +734,6 @@ describe('invités (sans compte) et paiement hors application', () => {
     assert.equal(res.body.price, 500);
     assert.equal(res.body.publisher_type, 'particulier');
     paidOffer = res.body;
-    await approve(paidOffer.id);
-    await approve(guestOffer.id);
   });
 
   test('un invité réserve une offre payante avec la référence de sa transaction', async () => {
@@ -699,15 +784,23 @@ describe('invités (sans compte) et paiement hors application', () => {
     assert.equal(res.body.pickup_code, guestReservation.pickup_code);
   });
 
-  test("réserver l'offre d'un invité : confirmée d'office, téléphone du publieur donné", async () => {
-    const res = await api
+  test("l'offre d'un invité ne se réserve pas : on appelle son numéro", async () => {
+    const withAccount = await api
       .post('/api/reservations')
       .set(as('beneficiary'))
       .send({ offer_id: guestOffer.id, quantity: 1 });
-    assert.equal(res.status, 201, res.text);
-    assert.equal(res.body.status, 'confirmed');
-    assert.equal(res.body.is_guest_offer, 1);
-    assert.equal(res.body.donor_phone, guest.phone);
+    assert.equal(withAccount.status, 409, withAccount.text);
+    assert.equal(withAccount.body.details.code, 'guest_offer_call');
+    assert.equal(withAccount.body.details.phone, guest.phone);
+
+    const asGuest = await api
+      .post('/api/reservations')
+      .send({ offer_id: guestOffer.id, quantity: 1, guest: { ...guest, phone: '+226 70 11 22 33' } });
+    assert.equal(asGuest.status, 409, asGuest.text);
+    assert.equal(asGuest.body.details.code, 'guest_offer_call');
+
+    const offer = await api.get(`/api/offers/${guestOffer.id}`);
+    assert.equal(offer.body.quantity_available, guestOffer.quantity_available);
   });
 
   test("l'invité annule sa réservation avec son jeton ; la quantité est rendue", async () => {
@@ -734,6 +827,59 @@ describe('invités (sans compte) et paiement hors application', () => {
   test("l'administrateur ne publie pas", async () => {
     const res = await api.post('/api/offers').set(as('admin')).send(offerBody());
     assert.equal(res.status, 403);
+  });
+  test('quota sans compte réglé par l’administrateur', async () => {
+    const settings = await api.get('/api/admin/settings').set(as('admin'));
+    assert.equal(settings.status, 200);
+    assert.deepEqual(settings.body, {
+      guest_offer_max: 10,
+      guest_offer_window_hours: 1,
+      guest_reservation_max: 20,
+      guest_reservation_window_hours: 1,
+    });
+
+    const invalid = await api
+      .put('/api/admin/settings')
+      .set(as('admin'))
+      .send({ guest_offer_max: -1 });
+    assert.equal(invalid.status, 400);
+    const unknown = await api.put('/api/admin/settings').set(as('admin')).send({ autre: 1 });
+    assert.equal(unknown.status, 400);
+    const forbidden = await api.put('/api/admin/settings').set(as('donor')).send({});
+    assert.equal(forbidden.status, 403);
+
+    // Des publications sans compte ont déjà été faites depuis cette adresse.
+    const saved = await api
+      .put('/api/admin/settings')
+      .set(as('admin'))
+      .send({ guest_offer_max: 1, guest_offer_window_hours: 24 });
+    assert.equal(saved.status, 200, saved.text);
+    assert.equal(saved.body.guest_offer_max, 1);
+    assert.equal(saved.body.guest_reservation_max, 20);
+
+    const limited = await api
+      .post('/api/offers')
+      .send(offerBody({ guest: { ...guest, phone: '+226 70 99 88 77' } }));
+    assert.equal(limited.status, 429, limited.text);
+    assert.equal(limited.body.details.code, 'guest_limit');
+    assert.match(limited.body.error, /1 publication sans compte par jour/);
+
+    // Avec un compte : pas de quota.
+    const withAccount = await api.post('/api/offers').set(as('donor')).send(offerBody());
+    assert.equal(withAccount.status, 201, withAccount.text);
+
+    await api.put('/api/admin/settings').set(as('admin')).send({ guest_offer_max: 0 });
+    const disabled = await api.post('/api/offers').send(offerBody({ guest }));
+    assert.equal(disabled.status, 403);
+    assert.equal(disabled.body.details.code, 'guest_disabled');
+
+    const sync = await api.get('/api/sync').set(as('admin'));
+    assert.equal(sync.body.admin.settings.guest_offer_max, 0);
+
+    await api
+      .put('/api/admin/settings')
+      .set(as('admin'))
+      .send({ guest_offer_max: 10, guest_offer_window_hours: 1 });
   });
 });
 
@@ -808,11 +954,60 @@ describe('mode hors ligne', () => {
     assert.ok(donor.body.received.every((r) => r.pickup_code === undefined));
 
     const admin = await api.get('/api/sync').set(as('admin'));
-    assert.ok(Array.isArray(admin.body.admin.pending_offers));
+    assert.ok(Array.isArray(admin.body.admin.moderation_offers));
   });
 });
 
 describe('administration', () => {
+  test('retrait d’une offre abusive : notifiée, e-mail si laissé', async () => {
+    const [category] = (await api.get('/api/categories')).body;
+    const body = {
+      category_id: category.id,
+      title: 'Offre abusive',
+      quantity: 1,
+      expiry_date: tomorrow(),
+      pickup_start: futureIso(-1),
+      pickup_end: futureIso(5),
+      address: '1 rue du Test',
+      latitude: 12.3714,
+      longitude: -1.5197,
+    };
+    const withEmail = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send({ ...body, contact_email: 'contact@test.local' });
+    const withoutEmail = await api
+      .post('/api/offers')
+      .send({ ...body, guest: { first_name: 'Ali', last_name: 'Ouédraogo', phone: '+226 70 55 44 33' } });
+    assert.equal(withoutEmail.status, 201, withoutEmail.text);
+
+    const before = sentMails.length;
+    const res = await api
+      .patch(`/api/admin/offers/${withEmail.body.id}/moderation`)
+      .set(as('admin'))
+      .send({ decision: 'reject', reason: 'Contenu trompeur' });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.status, 'rejected');
+    const mail = sentMails.at(-1);
+    assert.equal(mail.to, 'contact@test.local');
+    assert.match(mail.text, /Motif : Contenu trompeur/);
+
+    const notifications = await api.get('/api/notifications').set(as('donor'));
+    assert.ok(notifications.body.some((item) => item.title === 'Offre retirée'));
+
+    // Invité sans e-mail : retrait sans message.
+    const guestRes = await api
+      .patch(`/api/admin/offers/${withoutEmail.body.id}/moderation`)
+      .set(as('admin'))
+      .send({ decision: 'reject', reason: 'Spam' });
+    assert.equal(guestRes.status, 200);
+    assert.equal(sentMails.length, before + 1);
+
+    // Plus modifiable par le publieur une fois retirée.
+    const edit = await api.put(`/api/offers/${withEmail.body.id}`).set(as('donor')).send(body);
+    assert.equal(edit.status, 409);
+  });
+
   test("validation d'une association", async () => {
     const pending = await api.get('/api/admin/associations').set(as('admin'));
     assert.equal(pending.status, 200);
@@ -856,6 +1051,105 @@ describe('administration', () => {
       .send({ status: 'active' });
     assert.equal(reactivated.status, 200);
     assert.deepEqual(firebaseCalls.at(-1), ['disabled', 'uid-nouveau', false]);
+  });
+
+  test('ajout d’un utilisateur : actif d’emblée, connexion possible', async () => {
+    const actors = await api.get('/api/admin/actors').set(as('admin'));
+    const particulier = actors.body.find((actor) => actor.label === 'Particulier');
+    const admin = actors.body.find((actor) => actor.permission_role === 'admin');
+    const account = {
+      first_name: 'Awa',
+      last_name: 'Traoré',
+      email: 'awa.ajout@test.local',
+      phone: '+226 70 00 00 00',
+      actor_id: particulier.id,
+      password: 'Provisoire1',
+    };
+
+    const res = await api.post('/api/admin/users').set(as('admin')).send(account);
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.status, 'active');
+    assert.equal(res.body.actor_label, 'Particulier');
+    assert.equal(res.body.password_hash, undefined);
+    assert.deepEqual(firebaseCalls.at(-1), ['created', 'awa.ajout@test.local']);
+
+    const login = await api
+      .post('/api/auth/login')
+      .send({ email: account.email, password: account.password });
+    assert.equal(login.status, 200, login.text);
+
+    const again = await api.post('/api/admin/users').set(as('admin')).send(account);
+    assert.equal(again.status, 409);
+    assert.equal(again.body.details.code, 'email_taken');
+
+    if (admin) {
+      const asAdmin = await api
+        .post('/api/admin/users')
+        .set(as('admin'))
+        .send({ ...account, email: 'autre.admin@test.local', actor_id: admin.id });
+      assert.equal(asAdmin.status, 400);
+    }
+
+    const notAdmin = await api.post('/api/admin/users').set(as('donor')).send(account);
+    assert.equal(notAdmin.status, 403);
+
+    // Copié dans l'instantané de l'administrateur, pour l'écran hors ligne.
+    const sync = await api.get('/api/sync').set(as('admin'));
+    assert.ok(sync.body.admin.users.some((user) => user.email === account.email));
+    assert.ok(sync.body.admin.users.every((user) => user.password_hash === undefined));
+  });
+
+  test('MySQL indisponible : comptes lus dans la copie Firestore', async () => {
+    await api.get('/api/admin/users').set(as('admin'));
+    firestoreMirror.changed();
+    await flushFirestoreMirror();
+
+    const realQuery = pool.query;
+    pool.query = async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    };
+    try {
+      const res = await api.get('/api/admin/users?q=awa.ajout').set(as('admin'));
+      assert.equal(res.status, 200, res.text);
+      assert.equal(res.headers['x-data-source'], 'firestore');
+      assert.equal(res.body.length, 1);
+      assert.equal(res.body[0].actor_label, 'Particulier');
+      assert.equal(res.body[0].password_hash, undefined);
+      assert.equal(typeof res.body[0].created_at, 'string');
+    } finally {
+      pool.query = realQuery;
+    }
+  });
+
+  test('réservations, impact et compteurs de la plateforme pour l’admin', async () => {
+    const reservations = await api.get('/api/admin/reservations').set(as('admin'));
+    assert.equal(reservations.status, 200, reservations.text);
+    assert.ok(reservations.body.length > 0);
+    assert.ok(reservations.body.every((row) => row.pickup_code === undefined));
+
+    const pickedUp = await api
+      .get('/api/admin/reservations?status=picked_up')
+      .set(as('admin'));
+    assert.ok(pickedUp.body.every((row) => row.status === 'picked_up'));
+
+    const impact = await api.get('/api/admin/impact').set(as('admin'));
+    assert.equal(impact.status, 200);
+    assert.equal(impact.body.monthly.length, 12);
+    assert.ok(impact.body.impact.pickups >= 1);
+    assert.equal(typeof impact.body.impact.users, 'number');
+
+    const stats = await api.get('/api/admin/stats').set(as('admin'));
+    assert.equal(typeof stats.body.actors_total, 'number');
+    assert.equal(typeof stats.body.reservations_open, 'number');
+
+    assert.equal((await api.get('/api/admin/impact').set(as('donor'))).status, 403);
+
+    // Le tout copié dans l'instantané, pour les écrans hors ligne.
+    const sync = await api.get('/api/sync').set(as('admin'));
+    assert.equal(sync.body.admin.reservations.length, reservations.body.length);
+    assert.ok(sync.body.admin.reservations.every((row) => row.pickup_code === undefined));
+    assert.deepEqual(sync.body.admin.impact_global.impact, impact.body.impact);
+    assert.deepEqual(sync.body.admin.stats, stats.body);
   });
 
   test('acteurs : création, modification, protections', async () => {
@@ -948,6 +1242,97 @@ describe('administration', () => {
   test("les routes admin sont interdites aux autres rôles", async () => {
     const res = await api.get('/api/admin/stats').set(as('donor'));
     assert.equal(res.status, 403);
+  });
+});
+
+describe('mini chat avec l’administration', () => {
+  // PNG 1×1 valide.
+  const png =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  test('réservé aux comptes : sans session, 401', async () => {
+    assert.equal((await api.get('/api/messages')).status, 401);
+    assert.equal((await api.post('/api/messages').send({ body: 'Bonjour' })).status, 401);
+  });
+
+  test('message avec image, réponse de l’admin, lecture', async () => {
+    const empty = await api.post('/api/messages').set(as('beneficiary')).send({ body: '  ' });
+    assert.equal(empty.status, 400);
+
+    // Pièces jointes : images uniquement.
+    const pdf = await api
+      .post('/api/messages')
+      .set(as('beneficiary'))
+      .send({ photos: ['data:application/pdf;base64,JVBERi0xLjQ='] });
+    assert.equal(pdf.status, 400);
+    const fakePng = await api
+      .post('/api/messages')
+      .set(as('beneficiary'))
+      .send({ photos: ['data:image/png;base64,SGVsbG8gdGhlcmUgZnJpZW5k'] });
+    assert.equal(fakePng.status, 400);
+    const tooMany = await api
+      .post('/api/messages')
+      .set(as('beneficiary'))
+      .send({ photos: [png, png, png, png] });
+    assert.equal(tooMany.status, 400);
+
+    const sent = await api
+      .post('/api/messages')
+      .set(as('beneficiary'))
+      .send({ body: 'Le panier était abîmé', photos: [png] });
+    assert.equal(sent.status, 201, sent.text);
+    assert.equal(sent.body.photos_count, 1);
+    assert.equal(sent.body.from_admin, 0);
+
+    const photo = await api
+      .get(`/api/messages/${sent.body.id}/photos/0`)
+      .set(as('beneficiary'));
+    assert.equal(photo.status, 200);
+    assert.equal(photo.headers['content-type'], 'image/png');
+    // Un autre utilisateur ne voit ni la conversation ni ses images.
+    const stranger = await api
+      .get(`/api/messages/${sent.body.id}/photos/0`)
+      .set(as('donor'));
+    assert.equal(stranger.status, 404);
+    const donorList = await api.get('/api/messages').set(as('donor'));
+    assert.ok(donorList.body.every((m) => m.id !== sent.body.id));
+
+    // L'admin est notifié, voit la conversation et répond.
+    const adminSync = await api.get('/api/sync').set(as('admin'));
+    assert.ok(adminSync.body.messages.some((m) => m.id === sent.body.id));
+    assert.ok(
+      adminSync.body.notifications.some(
+        (n) => n.type === 'message' && n.body === 'Le panier était abîmé',
+      ),
+    );
+    const noTarget = await api.post('/api/messages').set(as('admin')).send({ body: 'Bonjour' });
+    assert.equal(noTarget.status, 400);
+    const reply = await api
+      .post('/api/messages')
+      .set(as('admin'))
+      .send({ user_id: sent.body.user_id, photos: [png] });
+    assert.equal(reply.status, 201, reply.text);
+    assert.equal(reply.body.from_admin, 1);
+    assert.equal(
+      (await api.get(`/api/messages/${reply.body.id}/photos/0`).set(as('admin'))).status,
+      200,
+    );
+
+    const read = await api.patch('/api/messages/read').set(as('admin')).send({
+      user_id: sent.body.user_id,
+    });
+    assert.equal(read.status, 204);
+
+    const userSync = await api.get('/api/sync').set(as('beneficiary'));
+    const mine = userSync.body.messages;
+    assert.ok(mine.every((m) => m.user_id === sent.body.user_id));
+    assert.ok(mine.find((m) => m.id === sent.body.id).read_at);
+    assert.equal(mine.find((m) => m.id === reply.body.id).read_at, null);
+    assert.ok(
+      userSync.body.notifications.some(
+        (n) => n.type === 'message' && n.body === '📷 1 image',
+      ),
+    );
   });
 });
 
@@ -1147,5 +1532,1004 @@ describe('sans Firebase (Windows / Linux) : compte local et IA du serveur', () =
       'utf8',
     );
     assert.equal(server.replace(/\r\n/g, '\n'), functions.replace(/\r\n/g, '\n'));
+  });
+});
+
+describe('push, créneau de retrait, compte désactivé, expiration, connexion', () => {
+  const pushes = [];
+  const staleToken = `perime-${'p'.repeat(30)}`;
+  const deviceToken = `appareil-${'d'.repeat(30)}`;
+  let categoryId;
+  let donorId;
+
+  const offerBody = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre corrections',
+    quantity: 3,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(-1),
+    pickup_end: futureIso(6),
+    address: 'Rue des tests',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  async function publish(overrides) {
+    const res = await api.post('/api/offers').set(as('donor2')).send(offerBody(overrides));
+    assert.equal(res.status, 201, res.text);
+    return res.body;
+  }
+
+  async function reserve(offerId, quantity = 1) {
+    const res = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offerId, quantity });
+    assert.equal(res.status, 201, res.text);
+    return res.body;
+  }
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    setPushSender({
+      async send(tokens, message) {
+        pushes.push({ tokens, message });
+        return tokens.map((token) =>
+          token === staleToken ? 'messaging/registration-token-not-registered' : null,
+        );
+      },
+    });
+
+    // Donateur créé pour ce bloc : il sera désactivé puis réactivé.
+    const actors = await api.get('/api/admin/actors').set(as('admin'));
+    const commercant = actors.body.find((actor) => actor.code === 'commercant');
+    const created = await api.post('/api/admin/users').set(as('admin')).send({
+      first_name: 'Issa',
+      last_name: 'Ouédraogo',
+      email: 'donateur.corrections@test.local',
+      phone: '+226 70 11 11 11',
+      actor_id: commercant.id,
+      password: 'Provisoire1',
+    });
+    assert.equal(created.status, 201, created.text);
+    donorId = created.body.id;
+    const session = await api
+      .post('/api/auth/login')
+      .send({ email: 'donateur.corrections@test.local', password: 'Provisoire1' });
+    tokens.donor2 = session.body.token;
+  });
+
+  after(() => {
+    setPushSender(null);
+    resetLoginAttempts();
+  });
+
+  test('push : jeton enregistré, envoyé après la confirmation, jeton périmé supprimé', async () => {
+    for (const token of [deviceToken, staleToken]) {
+      const res = await api
+        .post('/api/users/me/devices')
+        .set(as('beneficiary'))
+        .send({ token, platform: 'android' });
+      assert.equal(res.status, 204, res.text);
+    }
+
+    const offer = await publish({ title: 'Offre push' });
+    const reservation = await reserve(offer.id);
+    pushes.length = 0;
+    const confirm = await api
+      .patch(`/api/reservations/${reservation.id}/confirm`)
+      .set(as('donor2'));
+    assert.equal(confirm.status, 200, confirm.text);
+
+    // Le push part après la transaction : on laisse passer la boucle d'événements.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const sent = pushes.find((push) => push.message.notification.title === 'Réservation confirmée');
+    assert.ok(sent, 'push non envoyé');
+    assert.ok(sent.tokens.includes(deviceToken));
+    assert.equal(sent.message.data.type, 'reservation_confirmed');
+    assert.equal(sent.message.data.reservation_id, String(reservation.id));
+
+    const [rows] = await pool.query('SELECT token FROM device_tokens WHERE token = ?', [staleToken]);
+    assert.equal(rows.length, 0);
+
+    const removed = await api
+      .delete('/api/users/me/devices')
+      .set(as('beneficiary'))
+      .send({ token: deviceToken });
+    assert.equal(removed.status, 204);
+  });
+
+  test('retrait refusé avant le créneau ; heure réelle d’une action hors ligne prise en compte', async () => {
+    const offer = await publish({
+      title: 'Offre créneau',
+      pickup_start: futureIso(3),
+      pickup_end: futureIso(8),
+    });
+    const reservation = await reserve(offer.id);
+    await api.patch(`/api/reservations/${reservation.id}/confirm`).set(as('donor2'));
+
+    const early = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(early.status, 409);
+    assert.equal(early.body.details.code, 'pickup_too_early');
+
+    // Validé hors ligne pendant le créneau, envoyé plus tard : accepté.
+    await pool.query(
+      'UPDATE offers SET pickup_start = NOW() - INTERVAL 5 HOUR, pickup_end = NOW() + INTERVAL 1 HOUR WHERE id = ?',
+      [offer.id],
+    );
+    const actionAt = futureIso(-2);
+    const late = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .set('X-Action-At', actionAt)
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(late.status, 200, late.text);
+    assert.equal(new Date(late.body.picked_up_at).toISOString().slice(0, 16), actionAt.slice(0, 16));
+  });
+
+  test('impact : poids non indiqué estimé d’après l’unité', async () => {
+    const before = (await api.get('/api/impact/me').set(as('beneficiary'))).body;
+    const offer = await publish({ title: 'Riz en vrac', unit: 'kg', quantity: 5 });
+    const reservation = await reserve(offer.id, 2);
+    await api.patch(`/api/reservations/${reservation.id}/confirm`).set(as('donor2'));
+    const pickup = await api
+      .post(`/api/reservations/${reservation.id}/pickup`)
+      .set(as('donor2'))
+      .send({ pickup_code: reservation.pickup_code });
+    assert.equal(pickup.status, 200, pickup.text);
+
+    const after = (await api.get('/api/impact/me').set(as('beneficiary'))).body;
+    assert.equal(Number((after.food_kg - before.food_kg).toFixed(1)), 2);
+    assert.equal(after.estimated_pickups - before.estimated_pickups, 1);
+  });
+
+  test('compte désactivé : offres masquées, réservations annulées et notifiées', async () => {
+    const offer = await publish({ title: 'Offre donateur suspendu' });
+    const reservation = await reserve(offer.id);
+
+    const suspend = await api
+      .patch(`/api/admin/users/${donorId}/status`)
+      .set(as('admin'))
+      .send({ status: 'suspended', reason: 'Test des corrections' });
+    assert.equal(suspend.status, 200, suspend.text);
+
+    const listed = await api.get('/api/offers?q=donateur%20suspendu');
+    assert.equal(listed.body.length, 0);
+    const blocked = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(blocked.status, 409);
+
+    const mine = await api.get(`/api/reservations/${reservation.id}`).set(as('beneficiary'));
+    assert.equal(mine.body.status, 'cancelled');
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    assert.ok(notifications.body.some((n) => /compte du donateur a été désactivé/.test(n.body)));
+
+    const reactivate = await api
+      .patch(`/api/admin/users/${donorId}/status`)
+      .set(as('admin'))
+      .send({ status: 'active' });
+    assert.equal(reactivate.status, 200);
+    const back = await api.get('/api/offers?q=donateur%20suspendu');
+    assert.equal(back.body.length, 1);
+    assert.equal(back.body[0].quantity_available, 3);
+  });
+
+  test('expiration : le bénéficiaire est prévenu de l’annulation', async () => {
+    const offer = await publish({ title: 'Offre qui expire' });
+    const reservation = await reserve(offer.id);
+    await pool.query(
+      'UPDATE offers SET pickup_start = NOW() - INTERVAL 3 HOUR, pickup_end = NOW() - INTERVAL 1 MINUTE WHERE id = ?',
+      [offer.id],
+    );
+
+    const jobs = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.equal(jobs.status, 200);
+    assert.ok(jobs.body.expired_offers >= 1);
+
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    const expired = notifications.body.find((n) => n.title === 'Réservation expirée');
+    assert.ok(expired, 'bénéficiaire non prévenu');
+    const data = typeof expired.data === 'string' ? JSON.parse(expired.data) : expired.data;
+    assert.equal(data.reservation_id, reservation.id);
+  });
+
+  test('connexion : trop d’échecs, blocage temporaire (429)', async () => {
+    resetLoginAttempts();
+    const email = 'cible.force.brute@test.local';
+    for (let i = 0; i < MAX_FAILURES; i += 1) {
+      const res = await api.post('/api/auth/login').send({ email, password: `faux${i}` });
+      assert.equal(res.status, 401);
+    }
+    const blocked = await api.post('/api/auth/login').send({ email, password: 'encore' });
+    assert.equal(blocked.status, 429);
+    assert.equal(blocked.body.details.code, 'too_many_attempts');
+
+    // Les autres comptes ne sont pas bloqués.
+    const other = await api
+      .post('/api/auth/login')
+      .send({ email: 'beneficiaire@demo.local', password: DEMO_PASSWORD });
+    assert.equal(other.status, 200);
+  });
+});
+
+describe('profil, préférences et créneaux de retrait', () => {
+  const pushes = [];
+  let categoryId;
+
+  const slotOffer = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre à créneaux',
+    quantity: 4,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    address: 'Place des créneaux',
+    latitude: 12.37,
+    longitude: -1.52,
+    slots: [
+      { start: futureIso(5), end: futureIso(7) },
+      { start: futureIso(-1), end: futureIso(1) },
+    ],
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    tokens.beneficiary2 = await login('restaurant@demo.local');
+    setPushSender({
+      async send(deviceTokens, message) {
+        pushes.push({ tokens: deviceTokens, message });
+        return deviceTokens.map(() => null);
+      },
+    });
+  });
+
+  after(() => setPushSender(null));
+
+  test('profil : prénom, nom et téléphone modifiés, nom affiché recalculé', async () => {
+    const res = await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ first_name: 'Aminata', last_name: 'Sawadogo', phone: '+226 71 22 33 44' });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.name, 'Aminata Sawadogo');
+    assert.equal(res.body.phone, '+226 71 22 33 44');
+
+    const invalid = await api.patch('/api/users/me').set(as('beneficiary')).send({ phone: 'abc' });
+    assert.equal(invalid.status, 400);
+  });
+
+  test('préférences fusionnées, et push désactivé par l’utilisateur', async () => {
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { reco: { max_distance_km: 5 } } });
+    const res = await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { push_enabled: false } });
+    assert.equal(res.status, 200, res.text);
+    assert.deepEqual(res.body.preferences, { reco: { max_distance_km: 5 }, push_enabled: false });
+
+    const token = `profil-${'t'.repeat(30)}`;
+    await api
+      .post('/api/users/me/devices')
+      .set(as('beneficiary'))
+      .send({ token, platform: 'android' });
+    const offer = (
+      await api
+        .post('/api/offers')
+        .set(as('donor2'))
+        .send(
+          slotOffer({
+            title: 'Offre préférences push',
+            slots: undefined,
+            pickup_start: futureIso(-1),
+            pickup_end: futureIso(4),
+          }),
+        )
+    ).body;
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    // Push désactivé : la confirmation reste dans l'application seulement.
+    pushes.length = 0;
+    await api.patch(`/api/reservations/${reservation.body.id}/confirm`).set(as('donor2'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(pushes.every((push) => !push.tokens.includes(token)));
+
+    // Réactivé (clé supprimée) : l'annulation arrive en push.
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { push_enabled: null } });
+    await api.patch(`/api/reservations/${reservation.body.id}/cancel`).set(as('donor2'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(pushes.some((push) => push.tokens.includes(token)));
+
+    const me = await api.get('/api/auth/me').set(as('beneficiary'));
+    assert.equal(me.body.preferences.push_enabled, undefined);
+    assert.equal(me.body.preferences.reco.max_distance_km, 5);
+  });
+
+  test('offre à plusieurs créneaux : période globale et créneaux renvoyés', async () => {
+    const res = await api.post('/api/offers').set(as('donor')).send(slotOffer());
+    assert.equal(res.status, 201, res.text);
+    assert.equal(res.body.slots.length, 2);
+    // Période de l'offre : premier début, dernière fin.
+    const starts = res.body.slots.map((slot) => Date.parse(slot.start));
+    const ends = res.body.slots.map((slot) => Date.parse(slot.end));
+    assert.equal(Date.parse(res.body.pickup_start), Math.min(...starts));
+    assert.equal(Date.parse(res.body.pickup_end), Math.max(...ends));
+
+    const bad = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(slotOffer({ slots: [{ start: futureIso(3), end: futureIso(2) }] }));
+    assert.equal(bad.status, 400);
+  });
+
+  test('réservation : créneau obligatoire, enregistré, puis contrôlé au retrait', async () => {
+    const offer = (await api.post('/api/offers').set(as('donor')).send(slotOffer())).body;
+    const [, later] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+
+    const missing = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1 });
+    assert.equal(missing.status, 400);
+    assert.equal(missing.body.details.code, 'slot_required');
+
+    const res = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1, slot_id: later.id });
+    assert.equal(res.status, 201, res.text);
+    assert.equal(Date.parse(res.body.pickup_start), Date.parse(later.start));
+    assert.equal(Date.parse(res.body.pickup_end), Date.parse(later.end));
+
+    // Créneau choisi dans 5 h : retrait encore trop tôt.
+    await api.patch(`/api/reservations/${res.body.id}/confirm`).set(as('donor'));
+    const early = await api
+      .post(`/api/reservations/${res.body.id}/pickup`)
+      .set(as('donor'))
+      .send({ pickup_code: res.body.pickup_code });
+    assert.equal(early.status, 409);
+    assert.equal(early.body.details.code, 'pickup_too_early');
+  });
+
+  test('tâches : rappel de confirmation au donateur, créneau manqué annulé', async () => {
+    const offer = (await api.post('/api/offers').set(as('donor')).send(slotOffer())).body;
+    const [current] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary2'))
+      .send({ offer_id: offer.id, quantity: 2, slot_id: current.id });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    const first = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.ok(first.body.confirm_reminders >= 1);
+    const donorNotifications = await api.get('/api/notifications').set(as('donor'));
+    assert.ok(donorNotifications.body.some((n) => n.type === 'confirm_reminder'));
+
+    await pool.query('UPDATE reservations SET slot_end = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [
+      reservation.body.id,
+    ]);
+    const second = await api.post('/api/jobs/run').set('X-Jobs-Token', 'jeton-de-test');
+    assert.ok(second.body.missed_slots >= 1);
+    const after = (await api.get(`/api/offers/${offer.id}`)).body;
+    assert.equal(after.quantity_available, 4);
+    const notifications = await api.get('/api/notifications').set(as('beneficiary2'));
+    assert.ok(notifications.body.some((n) => n.title === 'Créneau manqué'));
+  });
+});
+
+describe('indicateurs IA du donateur et indicateurs sociaux de la plateforme', () => {
+  let categoryId;
+  let riskyOfferId;
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    // Offre payante, rien de réservé, retrait qui se termine bientôt : risque élevé.
+    const res = await api.post('/api/offers').set(as('donor')).send({
+      category_id: categoryId,
+      title: 'Offre à risque',
+      quantity: 10,
+      unit: 'portion',
+      price: 500,
+      payment_info: 'Orange Money +226 70 00 00 00',
+      expiry_date: tomorrow(),
+      pickup_start: futureIso(-2),
+      pickup_end: futureIso(3),
+      address: 'Rue du risque',
+      latitude: 12.37,
+      longitude: -1.52,
+    });
+    assert.equal(res.status, 201, res.text);
+    riskyOfferId = res.body.id;
+  });
+
+  after(() => {
+    config.rodium.apiKey = null;
+    setRodiumFetch(null);
+  });
+
+  test('risque de gaspillage et suggestions, aussi dans l’instantané hors ligne', async () => {
+    const res = await api.get('/api/offers/mine/insights').set(as('donor'));
+    assert.equal(res.status, 200, res.text);
+    const risky = res.body.find((insight) => insight.offer_id === riskyOfferId);
+    assert.ok(risky, 'offre absente des indicateurs');
+    assert.ok(risky.risk >= 60, `risque attendu élevé : ${risky.risk}`);
+    assert.equal(risky.level, 'high');
+    assert.ok(risky.suggestions.some((s) => /prix/.test(s)));
+    assert.ok(risky.suggestions.some((s) => /créneau/.test(s)));
+
+    const sync = await api.get('/api/sync').set(as('donor'));
+    assert.ok(sync.body.offer_insights.some((insight) => insight.offer_id === riskyOfferId));
+  });
+
+  test('conseil : par règles sans IA, rédigé par l’IA sinon', async () => {
+    config.rodium.apiKey = null;
+    const rules = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(rules.status, 200, rules.text);
+    assert.equal(rules.body.source, 'rules');
+    assert.match(rules.body.advice, /risque de gaspillage/);
+
+    config.rodium.apiKey = 'rd_sk_test';
+    resetAiRateLimit();
+    let prompt;
+    setRodiumFetch(async (url, options) => {
+      prompt = JSON.parse(JSON.parse(options.body).messages[1].content);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: 'Baissez le prix de l’offre à risque.' } }] }),
+        { status: 200 },
+      );
+    });
+    const ai = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(ai.body.source, 'ai');
+    assert.equal(ai.body.advice, 'Baissez le prix de l’offre à risque.');
+    assert.ok(prompt.offres.some((offer) => offer.titre === 'Offre à risque'));
+
+    // IA en panne : conseil par règles, jamais d'erreur.
+    setRodiumFetch(async () => new Response('panne', { status: 502 }));
+    const down = await api.post('/api/recommendations/advice').set(as('donor'));
+    assert.equal(down.status, 200);
+    assert.equal(down.body.source, 'rules');
+  });
+
+  test('publication express : brouillon d’offre réservé aux restaurateurs', async () => {
+    const restaurant = { Authorization: `Bearer ${await login('restaurant@demo.local')}` };
+    const text = 'Il me reste 5 plats de riz gras, gratuit, à prendre avant 20h';
+    config.rodium.apiKey = 'rd_sk_test';
+    resetAiRateLimit();
+
+    // Commerçant : refusé, même avec l'IA configurée.
+    const shop = await api.post('/api/recommendations/offer-draft').set(as('donor')).send({ text });
+    assert.equal(shop.status, 403, shop.text);
+
+    let prompt;
+    setRodiumFetch(async (url, options) => {
+      prompt = JSON.parse(JSON.parse(options.body).messages[1].content);
+      const draft = {
+        title: 'Riz gras',
+        category_id: categoryId,
+        description: 'Riz gras du jour.',
+        quantity: 5,
+        unit: 'plat',
+        weight_kg: 'inconnu',
+        price: 0,
+        expiry_in_days: 0,
+        pickup_start: null,
+        pickup_end: '20:00',
+      };
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '```json\n' + JSON.stringify(draft) + '\n```' } }] }),
+        { status: 200 },
+      );
+    });
+    const ok = await api
+      .post('/api/recommendations/offer-draft')
+      .set(restaurant)
+      .send({ text, local_time: '17:30' });
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(ok.body.source, 'ai');
+    assert.deepEqual(
+      ok.body.draft,
+      {
+        title: 'Riz gras',
+        category_id: categoryId,
+        description: 'Riz gras du jour.',
+        quantity: 5,
+        unit: 'plat',
+        weight_kg: null,
+        price: 0,
+        expiry_in_days: 0,
+        pickup_start: null,
+        pickup_end: '20:00',
+      },
+    );
+    assert.equal(prompt.heure_locale, '17:30');
+    assert.ok(prompt.categories.some((category) => category.id === categoryId));
+
+    // Catégorie inventée par le modèle : écartée, le reste est gardé.
+    setRodiumFetch(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({ title: 'Pains', category_id: 99999, quantity: 0 }) } }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const invented = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(invented.status, 200, invented.text);
+    assert.equal(invented.body.draft.category_id, null);
+    assert.equal(invented.body.draft.quantity, null);
+
+    // IA en panne : 503 explicite, le formulaire classique reste utilisable.
+    setRodiumFetch(async () => new Response('panne', { status: 502 }));
+    const down = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(down.status, 503);
+    assert.equal(down.body.details.code, 'ai_unavailable');
+
+    config.rodium.apiKey = null;
+    const off = await api.post('/api/recommendations/offer-draft').set(restaurant).send({ text });
+    assert.equal(off.status, 503);
+    assert.equal(off.body.details.code, 'ai_not_configured');
+  });
+
+  test('impact de la plateforme : indicateurs sociaux', async () => {
+    const res = await api.get('/api/admin/impact').set(as('admin'));
+    assert.equal(res.status, 200, res.text);
+    const { social } = res.body;
+    assert.ok(social.people_helped >= 1);
+    assert.ok(social.active_donors >= 1);
+    assert.ok(social.offers_shared >= 1);
+    assert.ok(social.free_share >= 0 && social.free_share <= 100);
+    assert.ok(social.completion_rate >= 0 && social.completion_rate <= 100);
+  });
+});
+
+describe('inscription bloquée par un compte Firebase orphelin', () => {
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000);
+
+  before(() => resetLoginAttempts());
+  after(() => {
+    firebaseUsers.clear();
+    resetLoginAttempts();
+  });
+
+  test('compte sans profil, créé il y a plus de 10 min : libéré', async () => {
+    firebaseUsers.set('orphelin@test.local', { uid: 'uid-orphelin', createdAt: minutesAgo(60) });
+    const res = await api.post('/api/auth/release-orphan').send({ email: 'orphelin@test.local' });
+    assert.equal(res.status, 204);
+    assert.equal(firebaseUsers.has('orphelin@test.local'), false);
+    assert.deepEqual(firebaseCalls.at(-1), ['deleted', 'uid-orphelin']);
+  });
+
+  test('inscription en cours (moins de 10 min) : conservé', async () => {
+    firebaseUsers.set('recent@test.local', { uid: 'uid-recent', createdAt: minutesAgo(2) });
+    const res = await api.post('/api/auth/release-orphan').send({ email: 'recent@test.local' });
+    assert.equal(res.status, 204);
+    assert.equal(firebaseUsers.has('recent@test.local'), true);
+  });
+
+  test('profil existant (par e-mail ou par compte Firebase) : jamais supprimé', async () => {
+    // Adresse d'un compte MySQL.
+    firebaseUsers.set('beneficiaire@demo.local', { uid: 'uid-demo', createdAt: minutesAgo(600) });
+    await api.post('/api/auth/release-orphan').send({ email: 'beneficiaire@demo.local' });
+    assert.equal(firebaseUsers.has('beneficiaire@demo.local'), true);
+
+    // Compte Firebase rattaché à un profil sous une autre adresse.
+    const [{ firebase_uid: uid }] = (
+      await pool.query('SELECT firebase_uid FROM users WHERE firebase_uid IS NOT NULL LIMIT 1')
+    )[0];
+    firebaseUsers.set('autre.adresse@test.local', { uid, createdAt: minutesAgo(600) });
+    await api.post('/api/auth/release-orphan').send({ email: 'autre.adresse@test.local' });
+    assert.equal(firebaseUsers.has('autre.adresse@test.local'), true);
+  });
+
+  test('adresse inconnue : 204 (ne révèle rien), essais limités', async () => {
+    resetLoginAttempts();
+    for (let i = 0; i < MAX_FAILURES; i += 1) {
+      const res = await api.post('/api/auth/release-orphan').send({ email: 'inconnu@test.local' });
+      assert.equal(res.status, 204);
+    }
+    const blocked = await api.post('/api/auth/release-orphan').send({ email: 'inconnu@test.local' });
+    assert.equal(blocked.status, 429);
+  });
+});
+
+describe('modification sans compte et créneaux d’une offre réservée', () => {
+  let categoryId;
+
+  const body = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Offre à modifier',
+    quantity: 4,
+    unit: 'portion',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(1),
+    pickup_end: futureIso(5),
+    address: 'Rue des créneaux',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+    resetLoginAttempts();
+  });
+
+  test('offre publiée sans compte : modifiable avec son jeton seulement', async () => {
+    const guest = { first_name: 'Issa', last_name: 'Kaboré', phone: '+226 75 44 33 22' };
+    const created = await api.post('/api/offers').send({ ...body({ title: 'Offre invité' }), guest });
+    assert.equal(created.status, 201, created.text);
+
+    const anonymous = await api.put(`/api/offers/${created.body.id}`).send(body({ title: 'Pirate' }));
+    assert.equal(anonymous.status, 403);
+    const other = await api
+      .put(`/api/offers/${created.body.id}`)
+      .set(as('donor'))
+      .send(body({ title: 'Pirate' }));
+    assert.equal(other.status, 403);
+
+    const res = await api
+      .put(`/api/offers/${created.body.id}`)
+      .set('X-Guest-Token', created.body.guest_token)
+      .send(body({ title: 'Offre invité modifiée', quantity: 6 }));
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.title, 'Offre invité modifiée');
+    assert.equal(res.body.quantity_available, 6);
+    // Identité de l'invité conservée.
+    assert.equal(res.body.guest_phone, guest.phone);
+  });
+
+  test('créneau réservé déplacé : réservation suivie et bénéficiaire prévenu', async () => {
+    const offer = (
+      await api
+        .post('/api/offers')
+        .set(as('donor'))
+        .send(
+          body({
+            title: 'Offre créneaux réservés',
+            slots: [
+              { start: futureIso(1), end: futureIso(3) },
+              { start: futureIso(6), end: futureIso(8) },
+            ],
+          }),
+        )
+    ).body;
+    const [first, second] = [...offer.slots].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const reservation = await api
+      .post('/api/reservations')
+      .set(as('beneficiary'))
+      .send({ offer_id: offer.id, quantity: 1, slot_id: second.id });
+    assert.equal(reservation.status, 201, reservation.text);
+
+    // Le créneau réservé ne peut pas être supprimé.
+    const removal = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('donor'))
+      .send({ slots: [{ id: first.id, start: first.start, end: first.end }] });
+    assert.equal(removal.status, 409);
+    assert.equal(removal.body.details.code, 'slot_reserved');
+
+    // Déplacé d'une heure, et un créneau ajouté : accepté malgré la réservation.
+    const moved = { start: futureIso(7), end: futureIso(9) };
+    const lastEnd = futureIso(12);
+    const res = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('donor'))
+      .send({
+        slots: [
+          { id: first.id, start: first.start, end: first.end },
+          { id: second.id, ...moved },
+          { start: futureIso(10), end: lastEnd },
+        ],
+      });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.slots.length, 3);
+    // Période de l'offre étendue à la fin du nouveau créneau.
+    assert.ok(Math.abs(Date.parse(res.body.pickup_end) - Date.parse(lastEnd)) < 1000);
+
+    const mine = await api.get(`/api/reservations/${reservation.body.id}`).set(as('beneficiary'));
+    assert.ok(Math.abs(Date.parse(mine.body.pickup_start) - Date.parse(moved.start)) < 1000);
+    const notifications = await api.get('/api/notifications').set(as('beneficiary'));
+    assert.ok(notifications.body.some((n) => n.type === 'slot_changed'));
+
+    // Seul le publieur modifie ses créneaux.
+    const other = await api
+      .patch(`/api/offers/${offer.id}/slots`)
+      .set(as('beneficiary'))
+      .send({ slots: [{ start: futureIso(2), end: futureIso(3) }] });
+    assert.equal(other.status, 403);
+  });
+
+  test('créneaux d’une offre sans compte, avec son jeton', async () => {
+    const guest = { first_name: 'Awa', last_name: 'Zongo', phone: '+226 76 55 44 33' };
+    const created = (
+      await api.post('/api/offers').send({ ...body({ title: 'Créneaux invité' }), guest })
+    ).body;
+    const res = await api
+      .patch(`/api/offers/${created.id}/slots`)
+      .set('X-Guest-Token', created.guest_token)
+      .send({ slots: [{ start: futureIso(2), end: futureIso(4) }] });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.slots.length, 1);
+
+    const past = await api
+      .patch(`/api/offers/${created.id}/slots`)
+      .set('X-Guest-Token', created.guest_token)
+      .send({ slots: [{ start: futureIso(-5), end: futureIso(-4) }] });
+    assert.equal(past.status, 400);
+  });
+});
+
+describe('dates de publication, alertes de recherche, compteurs publics', () => {
+  let categoryId;
+  const offer = (overrides = {}) => ({
+    category_id: categoryId,
+    title: 'Pain du soir',
+    quantity: 3,
+    unit: 'baguette',
+    expiry_date: tomorrow(),
+    pickup_start: futureIso(1),
+    pickup_end: futureIso(3),
+    address: 'Boulangerie du marché',
+    latitude: 12.37,
+    longitude: -1.52,
+    ...overrides,
+  });
+
+  before(async () => {
+    [{ id: categoryId }] = (await api.get('/api/categories')).body;
+  });
+
+  test('retrait déjà terminé ou après la date limite : refusé', async () => {
+    const past = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ pickup_start: futureIso(-3), pickup_end: futureIso(-1) }));
+    assert.equal(past.status, 400);
+    assert.equal(past.body.details.code, 'pickup_in_past');
+
+    const today = new Date().toISOString().slice(0, 10);
+    const late = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ expiry_date: today, pickup_start: futureIso(1), pickup_end: futureIso(30) }));
+    assert.equal(late.status, 400);
+    assert.equal(late.body.details.code, 'pickup_after_expiry');
+
+    const expired = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ expiry_date: '2020-01-01' }));
+    assert.equal(expired.status, 400);
+    assert.equal(expired.body.details.field, 'expiry_date');
+  });
+
+  test('recherche enregistrée : le compte est notifié de la nouvelle offre', async () => {
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({
+        latitude: 12.371,
+        longitude: -1.519,
+        preferences: {
+          search_alerts: null,
+          favorites: { offer_ids: [], searches: [{ name: 'Pain', text: 'pain', radius_km: 5 }] },
+        },
+      });
+
+    const created = await api.post('/api/offers').set(as('donor')).send(offer());
+    assert.equal(created.status, 201, created.text);
+    const far = await api
+      .post('/api/offers')
+      .set(as('donor'))
+      .send(offer({ title: 'Pain lointain', latitude: 14, longitude: 2 }));
+    assert.equal(far.status, 201, far.text);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const notifications = (await api.get('/api/notifications').set(as('beneficiary'))).body;
+    const alerts = notifications.filter((n) => n.type === 'search_match');
+    const offerIds = alerts.map((n) => (typeof n.data === 'string' ? JSON.parse(n.data) : n.data).offer_id);
+    assert.ok(offerIds.includes(created.body.id));
+    assert.ok(!offerIds.includes(far.body.id), 'hors du rayon : pas d’alerte');
+
+    // Alertes coupées dans le profil : plus rien.
+    await api
+      .patch('/api/users/me')
+      .set(as('beneficiary'))
+      .send({ preferences: { search_alerts: false } });
+    const muted = await api.post('/api/offers').set(as('donor')).send(offer({ title: 'Pain muet' }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const after = (await api.get('/api/notifications').set(as('beneficiary'))).body;
+    assert.ok(
+      !after.some(
+        (n) =>
+          n.type === 'search_match' &&
+          (typeof n.data === 'string' ? JSON.parse(n.data) : n.data).offer_id === muted.body.id,
+      ),
+    );
+  });
+
+  test('compteurs de la plateforme dans les instantanés, avec ou sans compte', async () => {
+    const guest = await api.get('/api/sync/public');
+    assert.equal(typeof guest.body.public_impact.food_kg, 'number');
+    assert.equal(typeof guest.body.public_impact.users, 'number');
+    const account = await api.get('/api/sync').set(as('beneficiary'));
+    assert.deepEqual(account.body.public_impact, guest.body.public_impact);
+  });
+});
+
+describe('Firebase injoignable, MySQL disponible : rien de bloqué, recopie ensuite', () => {
+  const saved = {};
+  const imports = [];
+  const updates = [];
+  const unreachable = () => {
+    throw new Error('getaddrinfo ENOTFOUND identitytoolkit.googleapis.com');
+  };
+
+  /** Coupe (ou rétablit) Firebase dans le faux Firebase. */
+  function firebaseDown(down) {
+    for (const name of ['setDisabled', 'markEmailVerified', 'setPassword', 'createUser']) {
+      saved[name] ??= fakeFirebase[name];
+      fakeFirebase[name] = down ? unreachable : saved[name];
+    }
+    saved.verifyIdToken ??= fakeFirebase.verifyIdToken;
+    fakeFirebase.verifyIdToken = down
+      ? () => {
+          throw new HttpError(503, 'Firebase momentanément indisponible', {
+            code: 'firebase_unavailable',
+          });
+        }
+      : saved.verifyIdToken;
+    fakeFirebase.importUser = down ? unreachable : async (account) => imports.push(account);
+    fakeFirebase.updateUser = down ? unreachable : async (uid, account) => updates.push([uid, account]);
+  }
+
+  const syncState = async (email) =>
+    (
+      await pool.query(
+        'SELECT firebase_uid, firebase_sync_at, firebase_sync_password FROM users WHERE email = ?',
+        [email],
+      )
+    )[0][0];
+
+  before(() => resetLoginAttempts());
+  after(() => {
+    firebaseDown(false);
+    delete fakeFirebase.importUser;
+    delete fakeFirebase.updateUser;
+  });
+
+  test('connexion Firebase : mot de passe gardé haché, connexion par MySQL pendant la panne', async () => {
+    const token = fakeToken('uid-nouveau', 'nouveau@test.local');
+    const ok = await api.post('/api/auth/firebase').send({ id_token: token, password: 'Panne2026' });
+    assert.equal(ok.status, 200, ok.text);
+    assert.equal(ok.body.user.firebase_sync_at, undefined);
+
+    firebaseDown(true);
+    const refused = await api.post('/api/auth/firebase').send({ id_token: token });
+    assert.equal(refused.status, 503);
+    assert.equal(refused.body.details.code, 'firebase_unavailable');
+
+    const fallback = await api
+      .post('/api/auth/login')
+      .send({ email: 'nouveau@test.local', password: 'Panne2026' });
+    assert.equal(fallback.status, 200, fallback.text);
+  });
+
+  test('nouveau mot de passe pendant la panne : accepté, recopié dans Firebase ensuite', async () => {
+    // Code déjà demandé plus haut : délai d'une minute levé.
+    await pool.query(
+      "DELETE o FROM email_otps o JOIN users u ON u.id = o.user_id WHERE u.email = 'nouveau@test.local'",
+    );
+    const forgot = await api.post('/api/auth/password/forgot').send({ email: 'nouveau@test.local' });
+    assert.equal(forgot.status, 204, forgot.text);
+    const res = await api.post('/api/auth/password/reset').send({
+      email: 'nouveau@test.local',
+      code: lastCode('nouveau@test.local'),
+      password: 'Nouveau2026',
+    });
+    assert.equal(res.status, 204, res.text);
+    const marked = await syncState('nouveau@test.local');
+    assert.ok(marked.firebase_sync_at);
+    assert.equal(marked.firebase_sync_password, 1);
+
+    const login = await api
+      .post('/api/auth/login')
+      .send({ email: 'nouveau@test.local', password: 'Nouveau2026' });
+    assert.equal(login.status, 200, login.text);
+
+    // Toujours en panne : rien de perdu, nouvel essai plus tard.
+    assert.equal(await syncFirebaseAccounts(), 0);
+    assert.ok((await syncState('nouveau@test.local')).firebase_sync_at);
+
+    firebaseDown(false);
+    assert.ok((await syncFirebaseAccounts()) >= 1);
+    const account = imports.find((item) => item.email === 'nouveau@test.local');
+    assert.equal(account.uid, 'uid-nouveau');
+    assert.ok(account.passwordHash.startsWith('$2'));
+    const cleared = await syncState('nouveau@test.local');
+    assert.equal(cleared.firebase_sync_at, null);
+    assert.equal(cleared.firebase_sync_password, 0);
+  });
+
+  test('désactivation pendant la panne : faite dans MySQL, recopiée dans Firebase ensuite', async () => {
+    const [{ id }] = (
+      await pool.query('SELECT id FROM users WHERE email = ?', ['nouveau@test.local'])
+    )[0];
+    firebaseDown(true);
+    const res = await api
+      .patch(`/api/admin/users/${id}/status`)
+      .set(as('admin'))
+      .send({ status: 'suspended', reason: 'Test de panne' });
+    assert.equal(res.status, 200, res.text);
+    assert.ok((await syncState('nouveau@test.local')).firebase_sync_at);
+
+    firebaseDown(false);
+    await syncFirebaseAccounts();
+    // Mot de passe non concerné : seul l'état est mis à jour.
+    assert.deepEqual(updates.at(-1), [
+      'uid-nouveau',
+      {
+        email: 'nouveau@test.local',
+        displayName: 'Awa Traoré',
+        emailVerified: true,
+        disabled: true,
+      },
+    ]);
+
+    await api
+      .patch(`/api/admin/users/${id}/status`)
+      .set(as('admin'))
+      .send({ status: 'active' });
+  });
+
+  test('compte créé pendant la panne : recopié dans Firebase une fois activé', async () => {
+    firebaseDown(true);
+    const [actor] = (await api.get('/api/actors')).body;
+    const created = await api.post('/api/auth/register').send({
+      email: 'panne@test.local',
+      password: 'motdepasse1',
+      first_name: 'Ina',
+      last_name: 'Sawadogo',
+      gender: 'female',
+      age: 28,
+      phone: '+226 70 99 88 77',
+      actor_id: actor.id,
+    });
+    assert.equal(created.status, 201, created.text);
+    assert.ok((await syncState('panne@test.local')).firebase_sync_at);
+
+    // Pas encore activé : pas recopié.
+    firebaseDown(false);
+    await syncFirebaseAccounts();
+    assert.ok(!imports.some((item) => item.email === 'panne@test.local'));
+
+    const verified = await api
+      .post('/api/auth/verify-email')
+      .send({ email: 'panne@test.local', code: lastCode('panne@test.local') });
+    assert.equal(verified.status, 200, verified.text);
+    await syncFirebaseAccounts();
+
+    const account = imports.find((item) => item.email === 'panne@test.local');
+    assert.ok(account.uid);
+    assert.equal(account.emailVerified, true);
+    const state = await syncState('panne@test.local');
+    assert.equal(state.firebase_uid, account.uid);
+    assert.equal(state.firebase_sync_at, null);
   });
 });

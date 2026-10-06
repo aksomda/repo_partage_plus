@@ -9,13 +9,15 @@ import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam } from '../http/validation.js';
 import {
   guestName,
-  guestRateLimit,
+  assertGuestQuota,
   guestSchema,
   guestTokenOf,
   hasGuestAccess,
   issueGuestToken,
+  recordGuestSubmission,
 } from '../services/guests.js';
 import { notify } from '../services/notifications.js';
+import { DONOR_ACTIVE } from '../services/offers.js';
 
 export const reservationsRouter = Router();
 
@@ -25,7 +27,8 @@ export const reservationsRouter = Router();
  */
 export const RESERVATION_SELECT = `
   SELECT r.*, o.title AS offer_title, o.unit, o.address, o.latitude, o.longitude,
-         o.pickup_start, o.pickup_end, o.expiry_date, o.donor_id, o.price, o.payment_info,
+         COALESCE(r.slot_start, o.pickup_start) AS pickup_start,
+         COALESCE(r.slot_end, o.pickup_end) AS pickup_end, o.expiry_date, o.donor_id, o.price, o.payment_info,
          o.category_id,
          o.donor_id IS NULL AS is_guest_offer,
          COALESCE(d.name, CONCAT(o.guest_first_name, ' ', o.guest_last_name)) AS donor_name,
@@ -40,6 +43,8 @@ export const RESERVATION_SELECT = `
 const createSchema = z.object({
   offer_id: id,
   quantity: z.coerce.number().int().min(1).default(1),
+  // Créneau choisi : obligatoire si l'offre en propose plusieurs.
+  slot_id: id.optional(),
   // Référence de la transaction faite hors application (Mobile Money…).
   payment_reference: z
     .string()
@@ -85,8 +90,31 @@ async function isGuestHolder(req, reservation) {
   );
 }
 
+/**
+ * Créneau de la réservation. Un seul créneau (ou aucun enregistré) : toute
+ * la période, rien à choisir. Plusieurs : [slotId] obligatoire, créneau de
+ * l'offre et pas encore terminé.
+ */
+async function chooseSlot(conn, offerId, slotId) {
+  const [slots] = await conn.query(
+    'SELECT id, start_at, end_at, end_at > NOW() AS open FROM offer_slots WHERE offer_id = ?',
+    [offerId],
+  );
+  if (slots.length <= 1) return null;
+  if (!slotId) {
+    throw new HttpError(400, 'Choisissez un créneau de retrait', {
+      field: 'slot_id',
+      code: 'slot_required',
+    });
+  }
+  const slot = slots.find((candidate) => candidate.id === slotId);
+  if (!slot) throw new HttpError(400, 'Créneau inconnu pour cette offre', { field: 'slot_id' });
+  if (!slot.open) throw new HttpError(409, 'Ce créneau de retrait est terminé');
+  return slot;
+}
+
 /** Rend la quantité à l'offre et la republie si elle était épuisée. */
-async function releaseQuantity(conn, reservation) {
+export async function releaseQuantity(conn, reservation) {
   await conn.query(
     `UPDATE offers
      SET status = IF(status = 'reserved' AND pickup_end > NOW(), 'published', status),
@@ -108,10 +136,12 @@ async function completeOfferIfDone(conn, offerId) {
   );
 }
 
-// Réserver une offre, avec ou sans compte (association : validée seulement).
-reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (req, res) => {
+// Réserver une offre publiée par un compte, avec ou sans compte (association :
+// validée seulement). L'offre d'un invité ne se réserve pas : on l'appelle.
+reservationsRouter.post('/', optionalAuth, async (req, res) => {
   const data = createSchema.parse(req.body);
   const guest = req.user ? null : guestReservationSchema.parse(req.body).guest;
+  if (guest) await assertGuestQuota('reservation', guest.phone, req.ip);
 
   if (req.user?.role === 'admin') {
     throw new HttpError(403, 'Un administrateur ne réserve pas d’offres');
@@ -127,13 +157,23 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
 
   const { reservationId, guestToken } = await transaction(async (conn) => {
     const [[offer]] = await conn.query(
-      `SELECT *, (expiry_date >= CURDATE() AND pickup_end > NOW()) AS still_valid
-       FROM offers WHERE id = ? FOR UPDATE`,
+      `SELECT o.*, (o.expiry_date >= CURDATE() AND o.pickup_end > NOW() AND ${DONOR_ACTIVE})
+                AS still_valid
+       FROM offers o WHERE o.id = ? FOR UPDATE`,
       [data.offer_id],
     );
 
     if (!offer || offer.status !== 'published' || !offer.still_valid) {
       throw new HttpError(409, 'Offre indisponible');
+    }
+    // Publiée sans compte : personne ne pourrait confirmer ni valider le
+    // retrait dans l'application, le bénéficiaire appelle le donateur.
+    if (offer.donor_id === null) {
+      throw new HttpError(
+        409,
+        `Offre publiée sans compte : appelez le donateur au ${offer.guest_phone}`,
+        { code: 'guest_offer_call', phone: offer.guest_phone },
+      );
     }
     if (req.user && offer.donor_id === req.user.id) {
       throw new HttpError(409, 'Impossible de réserver sa propre offre');
@@ -141,6 +181,8 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
     if (data.quantity > offer.quantity_available) {
       throw new HttpError(409, `Quantité disponible : ${offer.quantity_available}`);
     }
+
+    const slot = await chooseSlot(conn, offer.id, data.slot_id);
 
     const amount = Number(offer.price) * data.quantity;
     if (amount > 0 && !data.payment_reference) {
@@ -157,9 +199,6 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
     );
     if (existing) throw new HttpError(409, 'Vous avez déjà une réservation sur cette offre');
 
-    // Offre d'invité : personne ne peut confirmer dans l'application,
-    // la réservation est confirmée d'office et le retrait se règle par téléphone.
-    const autoConfirmed = offer.donor_id === null;
     const pickupCode = String(randomInt(0, 1_000_000)).padStart(6, '0');
     const [result] = await conn.query('INSERT INTO reservations SET ?', [
       {
@@ -169,13 +208,16 @@ reservationsRouter.post('/', optionalAuth, guestRateLimit({ max: 20 }), async (r
         guest_last_name: guest?.last_name ?? null,
         guest_phone: guest?.phone ?? null,
         quantity: data.quantity,
+        slot_id: slot?.id ?? null,
+        slot_start: slot?.start_at ?? null,
+        slot_end: slot?.end_at ?? null,
         amount,
         payment_reference: amount > 0 ? data.payment_reference : null,
         pickup_code: pickupCode,
-        status: autoConfirmed ? 'confirmed' : 'pending',
-        confirmed_at: autoConfirmed ? new Date() : null,
+        status: 'pending',
       },
     ]);
+    if (guest) await recordGuestSubmission(conn, 'reservation', guest.phone, req.ip);
 
     await conn.query(
       `UPDATE offers
@@ -324,10 +366,38 @@ reservationsRouter.patch('/:id/cancel', optionalAuth, async (req, res) => {
   res.json(await reload(reservationId, req.user));
 });
 
-// Retrait : le publieur saisit le code que lui présente le bénéficiaire.
+/** Retrait accepté jusqu'à une heure avant le début du créneau. */
+export const PICKUP_EARLY_MS = 60 * 60_000;
+
+/** Délai maximal de renvoi d'une action faite hors ligne. */
+const MAX_ACTION_DELAY_MS = 48 * 60 * 60_000;
+
+/**
+ * Heure réelle de l'action : en-tête X-Action-At (action faite hors ligne,
+ * envoyée plus tard), bornée aux 48 dernières heures ; sinon maintenant.
+ */
+export function actionTime(req, now = new Date()) {
+  const given = new Date(req.get('x-action-at') ?? '');
+  if (Number.isNaN(given.getTime())) return now;
+  const earliest = now.getTime() - MAX_ACTION_DELAY_MS;
+  return new Date(Math.min(now.getTime(), Math.max(earliest, given.getTime())));
+}
+
+const formatSlot = (date) =>
+  new Date(date).toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+  });
+
+// Retrait : le publieur saisit le code que lui présente le bénéficiaire,
+// pendant le créneau de retrait (ou jusqu'à une heure avant).
 reservationsRouter.post('/:id/pickup', authenticate, async (req, res) => {
   const { id: reservationId } = idParam.parse(req.params);
   const { pickup_code: pickupCode } = pickupSchema.parse(req.body);
+  const at = actionTime(req);
 
   await transaction(async (conn) => {
     const reservation = await loadReservation(conn, reservationId);
@@ -338,10 +408,19 @@ reservationsRouter.post('/:id/pickup', authenticate, async (req, res) => {
     if (reservation.pickup_code !== pickupCode) {
       throw new HttpError(400, 'Code de retrait incorrect');
     }
+    const start = new Date(reservation.pickup_start);
+    if (at.getTime() < start.getTime() - PICKUP_EARLY_MS) {
+      throw new HttpError(409, `Trop tôt : le créneau de retrait commence le ${formatSlot(start)} (UTC)`, {
+        code: 'pickup_too_early',
+      });
+    }
+    if (at.getTime() > new Date(reservation.pickup_end).getTime()) {
+      throw new HttpError(409, 'Créneau de retrait terminé', { code: 'pickup_too_late' });
+    }
 
     await conn.query(
-      "UPDATE reservations SET status = 'picked_up', picked_up_at = NOW() WHERE id = ?",
-      [reservationId],
+      "UPDATE reservations SET status = 'picked_up', picked_up_at = ? WHERE id = ?",
+      [at, reservationId],
     );
     await completeOfferIfDone(conn, reservation.offer_id);
     await notify(conn, reservation.beneficiary_id, {

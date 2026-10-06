@@ -23,8 +23,8 @@ const USERS = [
   ['Boulangerie du Centre', 'commerce@demo.local', 'donor', 'commercant'],
   ['Restaurant Le Partage', 'restaurant@demo.local', 'donor', 'restaurateur'],
   ['Awa Bénéficiaire', 'beneficiaire@demo.local', 'beneficiary', 'particulier'],
-  ['Solidarité Plus', 'association@demo.local', 'association', null],
-  ['Entraide Quartier', 'association2@demo.local', 'association', null],
+  ['Solidarité Plus', 'association@demo.local', 'association', 'association'],
+  ['Entraide Quartier', 'association2@demo.local', 'association', 'association'],
 ];
 
 /** Décale la position de démo d'environ `km` vers le nord-est. */
@@ -143,6 +143,11 @@ export async function seed({ fresh = false } = {}) {
         ],
       );
     }
+
+    // Un créneau par offre : toute la période de retrait.
+    await conn.query(`INSERT INTO offer_slots (offer_id, start_at, end_at)
+      SELECT o.id, o.pickup_start, o.pickup_end FROM offers o
+      WHERE NOT EXISTS (SELECT 1 FROM offer_slots s WHERE s.offer_id = o.id)`);
 
     // Une offre payante (paiement Mobile Money hors application).
     await conn.query(

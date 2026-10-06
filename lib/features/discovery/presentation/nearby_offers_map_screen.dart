@@ -11,6 +11,7 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/location_picker_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
+import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 
@@ -92,11 +93,19 @@ class _NearbyOffersMapScreenState extends ConsumerState<NearbyOffersMapScreen> {
   @override
   Widget build(BuildContext context) {
     final place = ref.watch(originProvider).place;
-    final offers = filterOffers(
-      ref.watch(availableOffersProvider),
-      place,
-      const OfferFilters(radiusKm: 50),
+    // Mêmes filtres que la liste (catégorie, prix, urgence, texte, rayon,
+    // favoris) : ce qui est affiché ici est ce qui est listé à l'accueil.
+    final filters = ref.watch(offerFiltersProvider);
+    final filtersNotifier = ref.read(offerFiltersProvider.notifier);
+    final offers = filterOffersByOwner(
+      available: ref.watch(availableOffersProvider),
+      mine: const [],
+      origin: place,
+      filters: filters.copyWith(owner: OfferOwner.all),
+      favoriteIds: ref.watch(favoritesProvider).offerIds,
     );
+    final filtered =
+        filters.isSearch || filters.hasRefinements || filters.favoritesOnly;
     final center = place ?? defaultCenter;
 
     // Repères proches regroupés : le rayon suit le zoom (~60 px à l'écran).
@@ -120,7 +129,15 @@ class _NearbyOffersMapScreenState extends ConsumerState<NearbyOffersMapScreen> {
       body: Column(
         children: [
           const OriginBar(),
-          const Divider(),
+          CategoryFilterChips(filters: filters, onApply: filtersNotifier.apply),
+          RefineFilterBar(
+            filters: filters,
+            onApply: filtersNotifier.apply,
+            onReset: filtersNotifier.reset,
+            hasOrigin: place != null,
+            onMap: true,
+          ),
+          const Divider(height: 1),
           Expanded(
             child: Stack(
               children: [
@@ -176,12 +193,26 @@ class _NearbyOffersMapScreenState extends ConsumerState<NearbyOffersMapScreen> {
                     child: Card(
                       child: Padding(
                         padding: const EdgeInsets.all(12),
-                        child: Text(
-                          place == null
-                              ? 'Position inconnue : choisissez un point '
-                                    'de départ.'
-                              : 'Aucune offre dans un rayon de 50 km.',
-                          textAlign: TextAlign.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              place == null
+                                  ? 'Position inconnue : choisissez un point '
+                                        'de départ.'
+                                  : filtered
+                                  ? 'Aucune offre ne correspond aux '
+                                        'filtres${_within(filters.radiusKm)}.'
+                                  : 'Aucune offre${_within(filters.radiusKm)}.',
+                              textAlign: TextAlign.center,
+                            ),
+                            if (filtered)
+                              TextButton.icon(
+                                onPressed: filtersNotifier.reset,
+                                icon: const Icon(Icons.filter_alt_off_outlined),
+                                label: const Text('Effacer les filtres'),
+                              ),
+                          ],
                         ),
                       ),
                     ),
@@ -206,3 +237,7 @@ class _NearbyOffersMapScreenState extends ConsumerState<NearbyOffersMapScreen> {
     );
   }
 }
+
+/// « dans un rayon de 10 km », rien si le rayon est illimité.
+String _within(double km) =>
+    km.isFinite ? ' dans un rayon de ${radiusLabel(km)}' : '';

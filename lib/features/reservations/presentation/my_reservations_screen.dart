@@ -11,12 +11,14 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
+import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
-/// Écran des réservations adaptatif selon le rôle :
-/// - Donateur (Commerçant / Restaurant) : TabBar avec "Commandes reçues" et "Mes réservations".
-/// - Bénéficiaire / Particulier : Liste directe de ses propres réservations.
+/// Écran des réservations adaptatif :
+/// - qui publie (donateur, ou tout compte ayant des offres ou des commandes
+///   reçues) : onglets « Commandes reçues » et « Mes réservations » ;
+/// - sinon : liste directe de ses propres réservations.
 /// Réservations : celles du compte (historique complet) et celles faites
 /// sans compte sur cet appareil.
 class MyReservationsScreen extends ConsumerStatefulWidget {
@@ -43,19 +45,24 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
   Widget build(BuildContext context) {
     final loggedIn = ref.watch(authTokenProvider) != null;
     final profile = ref.watch(profileProvider);
+    final receivedOrders = loggedIn
+        ? ref.watch(receivedReservationsProvider)
+        : const <Json>[];
+    // Tous les comptes (sauf admin) peuvent publier : un bénéficiaire ou une
+    // association qui a publié doit aussi confirmer et valider les retraits.
     final isDonor =
         loggedIn &&
         profile != null &&
-        (profile['role'] == 'donor' || profile['role'] == 'admin');
+        profile['role'] != 'admin' &&
+        (profile['role'] == 'donor' ||
+            receivedOrders.isNotEmpty ||
+            ref.watch(myOffersProvider).isNotEmpty);
 
     final accountReservations = loggedIn
         ? ref.watch(myReservationsProvider)
         : const <Json>[];
     final guestReservations =
         ref.watch(guestReservationsProvider).value ?? const <Json>[];
-    final receivedOrders = isDonor
-        ? ref.watch(receivedReservationsProvider)
-        : const <Json>[];
 
     if (isDonor) {
       return DefaultTabController(
@@ -139,14 +146,168 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
 }
 
 /// Vue de la liste des commandes reçues sur les offres d'un donateur.
-class _ReceivedOrdersList extends ConsumerWidget {
+/// Statut cherché dans l'historique des réservations.
+enum HistoryStatus {
+  all('Toutes'),
+  active('En cours'),
+  pickedUp('Retirées'),
+  cancelled('Annulées');
+
+  const HistoryStatus(this.label);
+
+  final String label;
+
+  bool accepts(Json reservation) {
+    final status = reservation['status'];
+    return switch (this) {
+      all => true,
+      // pending_sync : faite hors ligne, pas encore envoyée.
+      active =>
+        status == 'pending' ||
+            status == 'confirmed' ||
+            status == 'pending_sync',
+      pickedUp => status == 'picked_up',
+      cancelled => status == 'cancelled' || status == 'unavailable',
+    };
+  }
+}
+
+/// Période de l'historique, d'après la date de la réservation.
+enum HistoryPeriod {
+  all('Toutes les dates', null),
+  week('7 derniers jours', Duration(days: 7)),
+  month('30 derniers jours', Duration(days: 30));
+
+  const HistoryPeriod(this.label, this.span);
+
+  final String label;
+  final Duration? span;
+
+  bool accepts(Json reservation, DateTime now) {
+    final span = this.span;
+    if (span == null) return true;
+    // Sans date (faite hors ligne, pas encore envoyée) : récente.
+    final created = DateTime.tryParse('${reservation['created_at']}');
+    return created == null || created.isAfter(now.subtract(span));
+  }
+}
+
+/// Réservations correspondant au statut et à la période choisis.
+List<Json> filterHistory(
+  List<Json> reservations,
+  HistoryStatus status,
+  HistoryPeriod period, {
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  return [
+    for (final reservation in reservations)
+      if (status.accepts(reservation) && period.accepts(reservation, at))
+        reservation,
+  ];
+}
+
+/// Filtres de l'historique : statut (avec le nombre de réservations) et
+/// période.
+class _HistoryFilterBar extends StatelessWidget {
+  const _HistoryFilterBar({
+    required this.all,
+    required this.status,
+    required this.period,
+    required this.onStatus,
+    required this.onPeriod,
+  });
+
+  final List<Json> all;
+  final HistoryStatus status;
+  final HistoryPeriod period;
+  final ValueChanged<HistoryStatus> onStatus;
+  final ValueChanged<HistoryPeriod> onPeriod;
+
+  @override
+  Widget build(BuildContext context) {
+    final inPeriod = filterHistory(all, HistoryStatus.all, period);
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          for (final value in HistoryStatus.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text(
+                  '${value.label} '
+                  '(${inPeriod.where(value.accepts).length})',
+                ),
+                selected: status == value,
+                onSelected: (_) => onStatus(value),
+              ),
+            ),
+          PopupMenuButton<HistoryPeriod>(
+            tooltip: 'Période',
+            initialValue: period,
+            onSelected: onPeriod,
+            itemBuilder: (_) => [
+              for (final value in HistoryPeriod.values)
+                PopupMenuItem(value: value, child: Text(value.label)),
+            ],
+            child: Chip(
+              avatar: const Icon(Icons.date_range_outlined, size: 18),
+              label: Text(period.label),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Aucune réservation pour les filtres choisis.
+class _NoMatch extends StatelessWidget {
+  const _NoMatch({required this.onReset});
+
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          const Text(
+            'Aucune réservation pour ces filtres.',
+            style: TextStyle(color: AppColors.textMuted),
+          ),
+          TextButton.icon(
+            onPressed: onReset,
+            icon: const Icon(Icons.filter_alt_off_outlined),
+            label: const Text('Tout afficher'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReceivedOrdersList extends StatefulWidget {
   const _ReceivedOrdersList({required this.orders, required this.onRefresh});
 
   final List<Json> orders;
   final RefreshCallback onRefresh;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  State<_ReceivedOrdersList> createState() => _ReceivedOrdersListState();
+}
+
+class _ReceivedOrdersListState extends State<_ReceivedOrdersList> {
+  var _status = HistoryStatus.all;
+  var _period = HistoryPeriod.all;
+
+  @override
+  Widget build(BuildContext context) {
+    final orders = widget.orders;
+    final onRefresh = widget.onRefresh;
     if (orders.isEmpty) {
       return RefreshIndicator(
         onRefresh: onRefresh,
@@ -168,15 +329,28 @@ class _ReceivedOrdersList extends ConsumerWidget {
       );
     }
 
+    final shown = filterHistory(orders, _status, _period);
     return RefreshIndicator(
       onRefresh: onRefresh,
-      child: ListView.builder(
+      child: ListView(
         padding: const EdgeInsets.all(16),
-        itemCount: orders.length,
-        itemBuilder: (context, index) {
-          final order = orders[index];
-          return _ReceivedOrderTile(order: order);
-        },
+        children: [
+          _HistoryFilterBar(
+            all: orders,
+            status: _status,
+            period: _period,
+            onStatus: (value) => setState(() => _status = value),
+            onPeriod: (value) => setState(() => _period = value),
+          ),
+          if (shown.isEmpty)
+            _NoMatch(
+              onReset: () => setState(() {
+                _status = HistoryStatus.all;
+                _period = HistoryPeriod.all;
+              }),
+            ),
+          for (final order in shown) _ReceivedOrderTile(order: order),
+        ],
       ),
     );
   }
@@ -411,7 +585,7 @@ class _ReceivedOrderTileState extends ConsumerState<_ReceivedOrderTile> {
 }
 
 /// Vue de la liste des réservations effectuées par l'utilisateur.
-class _MyReservationsList extends StatelessWidget {
+class _MyReservationsList extends StatefulWidget {
   const _MyReservationsList({
     required this.accountReservations,
     required this.guestReservations,
@@ -425,14 +599,51 @@ class _MyReservationsList extends StatelessWidget {
   final RefreshCallback onRefresh;
 
   @override
+  State<_MyReservationsList> createState() => _MyReservationsListState();
+}
+
+class _MyReservationsListState extends State<_MyReservationsList> {
+  var _status = HistoryStatus.all;
+  var _period = HistoryPeriod.all;
+
+  void _reset() => setState(() {
+    _status = HistoryStatus.all;
+    _period = HistoryPeriod.all;
+  });
+
+  @override
   Widget build(BuildContext context) {
+    final all = [...widget.accountReservations, ...widget.guestReservations];
+    final accountReservations = filterHistory(
+      widget.accountReservations,
+      _status,
+      _period,
+    );
+    final guestReservations = filterHistory(
+      widget.guestReservations,
+      _status,
+      _period,
+    );
+    final loggedIn = widget.loggedIn;
     return RefreshIndicator(
-      onRefresh: onRefresh,
+      onRefresh: widget.onRefresh,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           if (!loggedIn) const _LoginHint(),
-          if (accountReservations.isEmpty && guestReservations.isEmpty)
+          if (all.isNotEmpty)
+            _HistoryFilterBar(
+              all: all,
+              status: _status,
+              period: _period,
+              onStatus: (value) => setState(() => _status = value),
+              onPeriod: (value) => setState(() => _period = value),
+            ),
+          if (all.isNotEmpty &&
+              accountReservations.isEmpty &&
+              guestReservations.isEmpty)
+            _NoMatch(onReset: _reset),
+          if (all.isEmpty)
             EmptyState(
               icon: Icons.event_note_outlined,
               title: 'Aucune réservation',

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/countries/country_widgets.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
@@ -10,7 +11,8 @@ import 'package:repo_partage_plus/core/widgets/actor_icon.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
-/// Inscription en deux étapes : choix de l'acteur, puis informations.
+/// Inscription en trois étapes : choix de l'acteur, informations, puis
+/// vérification (champs non modifiables) avant validation et envoi du code.
 class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({super.key});
 
@@ -19,9 +21,12 @@ class RegisterScreen extends ConsumerStatefulWidget {
 }
 
 class _RegisterScreenState extends ConsumerState<RegisterScreen> {
+  final _details = GlobalKey<_DetailsStepState>();
   Json? _actor;
 
   void _back() {
+    // Vérification : retour à la saisie, sans rien perdre.
+    if (_details.currentState?.leaveReview() ?? false) return;
     if (_actor != null) {
       setState(() => _actor = null);
     } else if (context.canPop()) {
@@ -36,7 +41,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     return PopScope(
       canPop: _actor == null,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) setState(() => _actor = null);
+        if (!didPop) _back();
       },
       child: AuthLayout(
         title: 'Inscription',
@@ -47,7 +52,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           if (_actor == null)
             _ActorStep(onSelected: (actor) => setState(() => _actor = actor))
           else
-            _DetailsStep(actor: _actor!),
+            _DetailsStep(key: _details, actor: _actor!),
         ],
       ),
     );
@@ -165,7 +170,7 @@ class _ActorCard extends StatelessWidget {
 // ---------- Étape 2 : informations personnelles ----------
 
 class _DetailsStep extends ConsumerStatefulWidget {
-  const _DetailsStep({required this.actor});
+  const _DetailsStep({super.key, required this.actor});
 
   final Json actor;
 
@@ -179,9 +184,10 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   final _firstName = TextEditingController();
   final _age = TextEditingController();
   final _email = TextEditingController();
-  final _phone = TextEditingController();
+  final _phone = PhoneController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
+  final _passwordFocus = FocusNode();
   final _associationName = TextEditingController();
   final _associationNumber = TextEditingController();
   final _associationAddress = TextEditingController();
@@ -190,16 +196,37 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
   var _loading = false;
   var _autovalidate = AutovalidateMode.disabled;
 
+  /// Étape 3 : informations affichées sans modification possible.
+  var _reviewing = false;
+
   bool get _isAssociation => widget.actor['permission_role'] == 'association';
+
+  /// « Précédent » : retour à la saisie. false si on n'était pas en vérification.
+  bool leaveReview() {
+    if (!_reviewing || _loading) return _reviewing;
+    setState(() => _reviewing = false);
+    return true;
+  }
+
+  /// « Suivant » : vérifie la saisie puis affiche le récapitulatif.
+  void _next() {
+    // Après une première tentative, les erreurs se corrigent à la saisie.
+    setState(() => _autovalidate = AutovalidateMode.onUserInteraction);
+    final valid = _form.currentState!.validate();
+    setState(() => _genderError = _gender == null);
+    if (!valid || _gender == null) return;
+    setState(() => _reviewing = true);
+  }
 
   @override
   void dispose() {
+    _phone.dispose();
+    _passwordFocus.dispose();
     for (final controller in [
       _lastName,
       _firstName,
       _age,
       _email,
-      _phone,
       _password,
       _confirm,
       _associationName,
@@ -211,13 +238,8 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
     super.dispose();
   }
 
+  /// « Valider » : crée le compte ; le serveur envoie le code d'activation.
   Future<void> _submit() async {
-    // Après une première tentative, les erreurs se corrigent à la saisie.
-    setState(() => _autovalidate = AutovalidateMode.onUserInteraction);
-    final valid = _form.currentState!.validate();
-    setState(() => _genderError = _gender == null);
-    if (!valid || _gender == null) return;
-
     setState(() => _loading = true);
     final email = _email.text.trim().toLowerCase();
     try {
@@ -231,7 +253,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
               gender: _gender!,
               age: int.parse(_age.text.trim()),
               email: email,
-              phone: _phone.text.trim(),
+              phone: _phone.value,
               password: _password.text,
               association: _isAssociation
                   ? {
@@ -260,6 +282,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
 
   @override
   Widget build(BuildContext context) {
+    if (_reviewing) return _review();
     return Form(
       key: _form,
       autovalidateMode: _autovalidate,
@@ -360,25 +383,9 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                 LabeledField(
                   label: 'Téléphone',
                   required: true,
-                  child: TextFormField(
+                  child: PhoneField(
                     controller: _phone,
-                    keyboardType: TextInputType.phone,
-                    textInputAction: TextInputAction.next,
-                    autofillHints: const [AutofillHints.telephoneNumber],
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
-                    ],
-                    decoration: const InputDecoration(
-                      hintText: '+226 70 00 00 00',
-                    ),
-                    validator: (value) {
-                      final phone = value?.trim() ?? '';
-                      if (phone.isEmpty) return 'Téléphone obligatoire';
-                      if (!RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(phone)) {
-                        return 'Numéro invalide';
-                      }
-                      return null;
-                    },
+                    requiredMessage: 'Téléphone obligatoire',
                   ),
                 ),
                 if (_isAssociation) ..._associationFields(),
@@ -387,6 +394,7 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                   required: true,
                   child: PasswordField(
                     controller: _password,
+                    focusNode: _passwordFocus,
                     hint: '8 caractères, lettres et chiffres',
                     textInputAction: TextInputAction.next,
                     autofillHints: const [AutofillHints.newPassword],
@@ -396,20 +404,11 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                 LabeledField(
                   label: 'Confirmer le mot de passe',
                   required: true,
-                  child: PasswordField(
+                  child: ConfirmPasswordField(
+                    password: _password,
                     controller: _confirm,
-                    hint: 'Saisissez-le à nouveau',
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _submit(),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Confirmation obligatoire';
-                      }
-                      if (value != _password.text) {
-                        return 'Les mots de passe ne correspondent pas';
-                      }
-                      return null;
-                    },
+                    passwordFocus: _passwordFocus,
+                    onSubmitted: (_) => _next(),
                   ),
                 ),
               ],
@@ -420,10 +419,9 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
                 constraints: const BoxConstraints(maxWidth: 440),
                 child: SizedBox(
                   width: double.infinity,
-                  child: LoadingButton(
-                    label: 'Créer mon compte',
-                    loading: _loading,
-                    onPressed: _submit,
+                  child: FilledButton(
+                    onPressed: _next,
+                    child: const Text('Suivant'),
                   ),
                 ),
               ),
@@ -431,6 +429,86 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
           ],
         ),
       ),
+    );
+  }
+
+  /// Récapitulatif non modifiable : « Précédent » pour corriger,
+  /// « Valider » pour créer le compte et recevoir le code par e-mail.
+  Widget _review() {
+    final phone = _phone.value;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            ActorAvatar(actor: widget.actor, size: 40),
+            const SizedBox(width: 12),
+            Expanded(
+              child: AuthHeading(
+                title: 'Vérifiez vos informations',
+                subtitle:
+                    'Profil : ${widget.actor['label']}. Pour corriger, '
+                    'revenez à l’étape précédente.',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+        FieldGrid(
+          children: [
+            _ReadOnlyField('Nom', _lastName.text.trim()),
+            _ReadOnlyField('Prénom', _firstName.text.trim()),
+            _ReadOnlyField('Sexe', _gender == 'male' ? 'Homme' : 'Femme'),
+            _ReadOnlyField('Âge', '${_age.text.trim()} ans'),
+            _ReadOnlyField('Adresse e-mail', _email.text.trim().toLowerCase()),
+            _ReadOnlyField('Téléphone', '${_phone.country.flag} $phone'),
+            if (_isAssociation) ...[
+              _ReadOnlyField(
+                'Nom de l’association',
+                _associationName.text.trim(),
+              ),
+              _ReadOnlyField(
+                'N° d’enregistrement',
+                _associationNumber.text.trim(),
+              ),
+              _ReadOnlyField('Adresse', _associationAddress.text.trim()),
+            ],
+            _ReadOnlyField('Mot de passe', '•' * _password.text.length),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'En validant, un code d’activation est envoyé à '
+          '${_email.text.trim().toLowerCase()}.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _loading ? null : leaveReview,
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Précédent'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: LoadingButton(
+                    label: 'Valider',
+                    loading: _loading,
+                    onPressed: _submit,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -468,8 +546,31 @@ class _DetailsStepState extends ConsumerState<_DetailsStep> {
     return null;
   };
 
-  /// Lettres (accents compris), espaces, tirets, apostrophes et points.
-  static final _namePattern = RegExp(r"^[\p{L} .'’-]+$", unicode: true);
+  /// Lettres (accents compris), espaces, tirets, apostrophes, points et
+  /// barres obliques (noms composés : « K.SOMDA/HETIE »).
+  static final _namePattern = RegExp(r"^[\p{L} .'’/-]+$", unicode: true);
+}
+
+/// Valeur saisie, affichée sans pouvoir la modifier.
+class _ReadOnlyField extends StatelessWidget {
+  const _ReadOnlyField(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return LabeledField(
+      label: label,
+      child: InputDecorator(
+        decoration: const InputDecoration(enabled: false),
+        child: Text(
+          value.isEmpty ? '—' : value,
+          style: const TextStyle(color: AppColors.text),
+        ),
+      ),
+    );
+  }
 }
 
 class _GenderSelector extends StatelessWidget {

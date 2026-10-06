@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import 'package:repo_partage_plus/core/network/api_config.dart';
@@ -55,9 +57,13 @@ String formatDay(DateTime date) {
 String formatHour(DateTime date) => '${_two(date.hour)}h${_two(date.minute)}';
 
 /// « aujourd'hui 16h00 – 20h00 » (heure locale).
-String formatPickup(Json offer) {
-  final start = DateTime.parse(offer['pickup_start'] as String).toLocal();
-  final end = DateTime.parse(offer['pickup_end'] as String).toLocal();
+String formatPickup(Json offer) => formatPeriod(
+  DateTime.parse(offer['pickup_start'] as String).toLocal(),
+  DateTime.parse(offer['pickup_end'] as String).toLocal(),
+);
+
+/// « demain 08h00 – 10h00 », ou sur deux jours (heures locales).
+String formatPeriod(DateTime start, DateTime end) {
   final sameDay =
       start.year == end.year &&
       start.month == end.month &&
@@ -65,6 +71,38 @@ String formatPickup(Json offer) {
   return sameDay
       ? '${formatDay(start)} ${formatHour(start)} – ${formatHour(end)}'
       : '${formatDay(start)} ${formatHour(start)} – ${formatDay(end)} ${formatHour(end)}';
+}
+
+/// Créneau de retrait d'une offre (heures locales) ; [id] null : période
+/// entière d'une offre sans créneau enregistré.
+typedef PickupSlot = ({int? id, DateTime start, DateTime end});
+
+/// Créneaux de l'offre, triés ; à défaut, toute la période de retrait.
+List<PickupSlot> offerSlots(Json offer) {
+  var raw = offer['slots'];
+  if (raw is String) {
+    try {
+      raw = jsonDecode(raw);
+    } on FormatException {
+      raw = null;
+    }
+  }
+  final slots = <PickupSlot>[
+    if (raw is List)
+      for (final slot in raw.whereType<Map<Object?, Object?>>())
+        if (DateTime.tryParse('${slot['start']}') case final start?)
+          if (DateTime.tryParse('${slot['end']}') case final end?)
+            (
+              id: (slot['id'] as num?)?.toInt(),
+              start: start.toLocal(),
+              end: end.toLocal(),
+            ),
+  ]..sort((a, b) => a.start.compareTo(b.start));
+  if (slots.isNotEmpty) return slots;
+  final start = DateTime.tryParse('${offer['pickup_start']}');
+  final end = DateTime.tryParse('${offer['pickup_end']}');
+  if (start == null || end == null) return const [];
+  return [(id: null, start: start.toLocal(), end: end.toLocal())];
 }
 
 String formatExpiry(Json offer) =>
@@ -83,6 +121,9 @@ const _categoryIcons = <String, IconData>{
 
 IconData categoryIcon(Object? name) =>
     _categoryIcons[name] ?? Icons.fastfood_outlined;
+
+/// Icônes proposées pour une catégorie (écran d'administration).
+Map<String, IconData> get categoryIconChoices => _categoryIcons;
 
 /// Couleur de fond associée à une catégorie (déterministe).
 Color categoryColor(Object? id) {
@@ -167,10 +208,18 @@ class OfferThumbnail extends StatelessWidget {
 
 /// Carte d'offre des listes (accueil, recherche, carte).
 class OfferCard extends StatelessWidget {
-  const OfferCard({super.key, required this.offer, required this.onTap});
+  const OfferCard({
+    super.key,
+    required this.offer,
+    required this.onTap,
+    this.showStatus = false,
+  });
 
   final Json offer;
   final VoidCallback onTap;
+
+  /// Affiche le statut (en attente, publiée…) : liste « Mes offres ».
+  final bool showStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -201,6 +250,10 @@ class OfferCard extends StatelessWidget {
                         fontSize: 15,
                       ),
                     ),
+                    if (showStatus) ...[
+                      const SizedBox(height: 4),
+                      StatusBadge(offer['status'] as String? ?? 'pending'),
+                    ],
                     const SizedBox(height: 2),
                     Text(
                       offer['donor_name'] as String? ?? '',

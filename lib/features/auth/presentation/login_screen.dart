@@ -56,25 +56,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     }
   }
 
-  Future<void> _forgotPassword() async {
-    final email = await showDialog<String>(
-      context: context,
-      builder: (context) => _ResetPasswordDialog(initialEmail: _email.text),
-    );
-    if (email == null || !mounted) return;
-
-    try {
-      await ref.read(authRepositoryProvider).sendPasswordReset(email);
-      if (mounted) {
-        showMessage(
-          context,
-          'Un lien de réinitialisation a été envoyé à $email',
-        );
-      }
-    } catch (error) {
-      if (mounted) showMessage(context, error.toString(), error: true);
-    }
-  }
+  /// Code par e-mail puis nouveau mot de passe, sans aide d'un administrateur.
+  void _forgotPassword() =>
+      context.push(AppRoutes.forgotPasswordFor(_email.text.trim()));
 
   @override
   Widget build(BuildContext context) {
@@ -145,64 +129,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           onTap: () =>
               context.push(AppRoutes.verifyEmailFor(_email.text.trim())),
         ),
-      ],
-    );
-  }
-}
-
-class _ResetPasswordDialog extends StatefulWidget {
-  const _ResetPasswordDialog({required this.initialEmail});
-
-  final String initialEmail;
-
-  @override
-  State<_ResetPasswordDialog> createState() => _ResetPasswordDialogState();
-}
-
-class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
-  final _form = GlobalKey<FormState>();
-  late final _email = TextEditingController(text: widget.initialEmail.trim());
-
-  @override
-  void dispose() {
-    _email.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    if (_form.currentState!.validate()) {
-      Navigator.of(context).pop(_email.text.trim());
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Mot de passe oublié'),
-      content: Form(
-        key: _form,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Recevez un lien pour choisir un nouveau mot de passe.'),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _email,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(hintText: 'exemple@mail.com'),
-              validator: validateEmail,
-              onFieldSubmitted: (_) => _submit(),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Annuler'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('Envoyer')),
       ],
     );
   }

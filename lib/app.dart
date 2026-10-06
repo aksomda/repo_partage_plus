@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:repo_partage_plus/core/notifications/push_messaging.dart';
 import 'package:repo_partage_plus/core/offline/offline_banner.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_router.dart';
@@ -13,6 +14,8 @@ class RepasPartageApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Démarre la synchronisation automatique pour toute la durée de l'app.
     ref.watch(syncControllerProvider);
+    // Notifications push (Android, iOS) : jeton envoyé à chaque connexion.
+    ref.watch(pushMessagingProvider);
 
     return MaterialApp.router(
       title: 'Partage+',
