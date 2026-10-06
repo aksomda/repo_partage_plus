@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:repo_partage_plus/core/network/api_config.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/features/favorites/presentation/favorite_button.dart';
 
 // ---------- Formats (français, sans dépendance) ----------
 
@@ -206,7 +207,8 @@ class OfferThumbnail extends StatelessWidget {
   }
 }
 
-/// Carte d'offre des listes (accueil, recherche, carte).
+/// Carte d'offre des listes (accueil, recherche, carte) : vignette, titre,
+/// donateur, distance et prix, date limite, et cœur des favoris.
 class OfferCard extends StatelessWidget {
   const OfferCard({
     super.key,
@@ -225,30 +227,50 @@ class OfferCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final price = offer['price'] as num? ?? 0;
     final distance = offer['distance_km'] as num?;
+    final weight = offer['weight_kg'] as num?;
+    final id = offer['id'];
+    // Offre pas encore envoyée (hors ligne) ou liste « Mes offres » : pas de
+    // favori.
+    final canFavorite = id is int && offer['local'] != true && !showStatus;
 
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(10),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              OfferThumbnail(offer: offer),
+              OfferThumbnail(offer: offer, size: 80),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      offer['title'] as String,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              offer['title'] as String,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (canFavorite)
+                          SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: FavoriteButton(offerId: id, compact: true),
+                          ),
+                      ],
                     ),
                     if (showStatus) ...[
                       const SizedBox(height: 4),
@@ -278,6 +300,18 @@ class OfferCard extends StatelessWidget {
                               ? AppColors.primary
                               : AppColors.accent,
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 2,
+                      children: [
+                        if (weight != null && weight > 0)
+                          _Info(
+                            Icons.scale_outlined,
+                            '${formatNumber(weight, decimals: 1)} kg',
+                          ),
                         _Info(
                           Icons.schedule,
                           formatExpiry(offer),

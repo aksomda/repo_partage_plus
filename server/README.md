@@ -90,8 +90,8 @@ Mot de passe commun : `Demo1234!`
 | `commerce@demo.local` | Donateur (boulangerie) |
 | `restaurant@demo.local` | Donateur (restaurant) |
 | `beneficiaire@demo.local` | Bénéficiaire |
-| `association@demo.local` | Association validée |
-| `association2@demo.local` | Association en attente de validation |
+| `association@demo.local` | Association (Solidarité Plus) |
+| `association2@demo.local` | Association (Entraide Quartier) |
 
 ## Base de données
 
@@ -102,7 +102,7 @@ Schéma complet : [`src/db/schema.sql`](src/db/schema.sql).
 | `actors` | Acteurs proposés à l'inscription (particulier, commerçant…), configurés par l'admin, avec leurs droits |
 | `users` | Comptes : nom, prénom, sexe, âge, téléphone, acteur, droits, position, statut `pending` → `active` / `suspended` |
 | `email_otps` | Codes d'activation envoyés par e-mail (hachés, 10 min, 5 essais) |
-| `associations` | Informations des associations et statut de validation |
+| `associations` | Informations des associations (aucune validation : actives dès l'activation du compte) |
 | `categories` | Catégories d'aliments |
 | `impact_factors` | Facteurs par catégorie : kg de CO2 évités et repas par kg sauvé |
 | `offers` | Offres de dons : quantité, poids, DLC, créneau et lieu de retrait, statut de modération |
@@ -156,7 +156,7 @@ l'en-tête `Idempotent-Replayed: true`. Voir [docs/HORS_LIGNE.md](../docs/HORS_L
 
 | Méthode | Route | Accès | Rôle |
 |---|---|---|---|
-| POST | `/reservations` | bénéficiaire, association validée | Réserver `{ offer_id, quantity }` → reçoit `pickup_code` |
+| POST | `/reservations` | bénéficiaire, association | Réserver `{ offer_id, quantity }` → reçoit `pickup_code` |
 | GET | `/reservations/mine` | connecté | Mes réservations |
 | GET | `/reservations/received` | donateur | Réservations reçues sur mes offres |
 | GET | `/reservations/:id` | concerné ou admin | Détail |
@@ -188,8 +188,6 @@ l'en-tête `Idempotent-Replayed: true`. Voir [docs/HORS_LIGNE.md](../docs/HORS_L
 | PATCH | `/admin/offers/:id/moderation` | `{ decision: approve \| reject, reason }` (motif obligatoire si refus) |
 | GET | `/admin/users?role&status&q` | Comptes |
 | PATCH | `/admin/users/:id/status` | `{ status: active \| suspended, reason }` |
-| GET | `/admin/associations?status=pending` | Associations à valider |
-| PATCH | `/admin/associations/:id/review` | `{ decision: approve \| reject, reason }` |
 | POST / PUT / DELETE | `/admin/categories[/:id]` | Gérer les catégories `{ name, icon }` |
 | POST / PUT / DELETE | `/admin/factors[/:id]` | Gérer les facteurs `{ category_id, co2_kg_per_kg, meals_per_kg, source }` |
 | POST | `/admin/jobs/run` | Lancer les tâches planifiées maintenant |
@@ -377,8 +375,8 @@ Demo1234!
 | `commerce@demo.local`     | Donor — bakery               |
 | `restaurant@demo.local`   | Donor — restaurant           |
 | `beneficiaire@demo.local` | Beneficiary                  |
-| `association@demo.local`  | Approved association         |
-| `association2@demo.local` | Association pending approval |
+| `association@demo.local`  | Association (Solidarité Plus) |
+| `association2@demo.local` | Association (Entraide Quartier) |
 
 ## Database
 
@@ -389,7 +387,7 @@ The complete database schema is available in [`src/db/schema.sql`](src/db/schema
 | `actors`         | User roles available during registration, such as individuals and retailers; configured by administrators with their associated permissions  |
 | `users`          | User accounts: last name, first name, gender, age, phone number, actor, permissions, location, and status `pending` → `active` / `suspended` |
 | `email_otps`     | Email verification codes, stored as hashes, valid for 10 minutes, with a maximum of 5 attempts                                               |
-| `associations`   | Association information and approval status                                                                                                  |
+| `associations`   | Association information (no approval: active once the account is activated)                                                                                                 |
 | `categories`     | Food categories                                                                                                                              |
 | `impact_factors` | Impact factors by category: kilograms of CO₂ avoided and meals per kilogram of food saved                                                    |
 | `offers`         | Donation offers: quantity, weight, expiry date, pickup time slot, pickup location, and moderation status                                     |
@@ -519,7 +517,7 @@ See [`docs/HORS_LIGNE.md`](../docs/HORS_LIGNE.md) for more information about off
 
 | Method | Route                       | Access                            | Purpose                                                                          |
 | ------ | --------------------------- | --------------------------------- | -------------------------------------------------------------------------------- |
-| POST   | `/reservations`             | Beneficiary, approved association | Creates a reservation using `{ offer_id, quantity }` and returns a `pickup_code` |
+| POST   | `/reservations`             | Beneficiary, association          | Creates a reservation using `{ offer_id, quantity }` and returns a `pickup_code` |
 | GET    | `/reservations/mine`        | Authenticated                     | Returns the user's reservations                                                  |
 | GET    | `/reservations/received`    | Donor                             | Returns reservations received for the donor's offers                             |
 | GET    | `/reservations/:id`         | Related user or administrator     | Returns reservation details                                                      |
@@ -553,8 +551,6 @@ The following endpoints require the `admin` role.
 | PATCH               | `/admin/offers/:id/moderation`       | Uses `{ decision: approve \| reject, reason }`; a reason is required when rejecting an offer |
 | GET                 | `/admin/users?role&status&q`         | Returns user accounts                                                                        |
 | PATCH               | `/admin/users/:id/status`            | Uses `{ status: active \| suspended, reason }`                                               |
-| GET                 | `/admin/associations?status=pending` | Returns associations awaiting approval                                                       |
-| PATCH               | `/admin/associations/:id/review`     | Uses `{ decision: approve \| reject, reason }`                                               |
 | POST / PUT / DELETE | `/admin/categories[/:id]`            | Manages categories using `{ name, icon }`                                                    |
 | POST / PUT / DELETE | `/admin/factors[/:id]`               | Manages impact factors using `{ category_id, co2_kg_per_kg, meals_per_kg, source }`          |
 | POST                | `/admin/jobs/run`                    | Immediately triggers scheduled jobs                                                          |

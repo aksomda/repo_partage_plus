@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Le téléphone (USB ou ADB Wi-Fi) voit l'API du PC sur localhost:3000.
+      "label": "adb reverse API",
+      "type": "shell",
+      "command": "adb reverse tcp:3000 tcp:3000",
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    }
+  ]
+}

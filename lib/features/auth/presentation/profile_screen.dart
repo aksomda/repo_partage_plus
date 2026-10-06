@@ -9,6 +9,7 @@ import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/app_menu.dart';
+import 'package:repo_partage_plus/core/widgets/profile_avatar.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/data/profile_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
@@ -17,10 +18,11 @@ import 'package:repo_partage_plus/features/discovery/presentation/widgets/discov
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/recommendations/data/preferences.dart';
 
-/// Profil du compte connecté : identité, association, préférences de
-/// recommandation, position, notifications, activité et sécurité. Les
-/// modifications passent par la file d'attente (hors ligne compris), sauf
-/// le changement de mot de passe.
+/// Profil du compte connecté (maquette) : en-tête, puis un menu vers ses
+/// informations (et son association), ses préférences de recommandation et
+/// sa position, son activité, et ses paramètres (notifications, sécurité).
+/// Les modifications passent par la file d'attente (hors ligne compris),
+/// sauf le changement de mot de passe.
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
@@ -28,7 +30,6 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(profileProvider);
     final isAdmin = profile?['role'] == 'admin';
-    final association = asJson(profile?['association']);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profil')),
@@ -44,30 +45,23 @@ class ProfileScreen extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                 children: [
                   _Header(profile: profile),
-                  const SizedBox(height: 16),
-                  _IdentitySection(profile: profile),
-                  if (association != null) ...[
-                    const SizedBox(height: 16),
-                    _AssociationSection(association: association),
-                  ],
-                  if (!isAdmin) ...[
-                    const SizedBox(height: 16),
-                    const _PreferencesSection(),
-                  ],
-                  const SizedBox(height: 16),
-                  _PositionSection(profile: profile),
-                  const SizedBox(height: 16),
-                  _NotificationsSection(isAdmin: isAdmin),
-                  if (!isAdmin) ...[
-                    const SizedBox(height: 16),
-                    const _ActivitySection(),
-                  ],
-                  const SizedBox(height: 16),
-                  _SecuritySection(profile: profile),
+                  const SizedBox(height: 20),
+                  _ProfileMenu(profile: profile, isAdmin: isAdmin),
                   const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: () => _openPage(
+                      context,
+                      _ProfilePage.information,
+                      startEditing: true,
+                    ),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Modifier le profil'),
+                  ),
+                  const SizedBox(height: 12),
                   OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.danger,
+                      side: const BorderSide(color: AppColors.danger),
                     ),
                     onPressed: () => confirmLogout(context, ref),
                     icon: const Icon(Icons.logout),
@@ -75,6 +69,148 @@ class ProfileScreen extends ConsumerWidget {
                   ),
                 ],
               ),
+            ),
+    );
+  }
+}
+
+/// Pages ouvertes depuis le menu du profil.
+enum _ProfilePage {
+  information('Mes informations'),
+  preferences('Mes préférences'),
+  settings('Paramètres');
+
+  const _ProfilePage(this.title);
+
+  final String title;
+}
+
+void _openPage(
+  BuildContext context,
+  _ProfilePage page, {
+  bool startEditing = false,
+}) {
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => _ProfileDetail(page: page, startEditing: startEditing),
+    ),
+  );
+}
+
+/// Menu du profil : une ligne par rubrique (maquette).
+class _ProfileMenu extends StatelessWidget {
+  const _ProfileMenu({required this.profile, required this.isAdmin});
+
+  final Json profile;
+  final bool isAdmin;
+
+  @override
+  Widget build(BuildContext context) {
+    final association = asJson(profile['association']);
+    final entries = <(IconData, String, String?, VoidCallback)>[
+      (
+        Icons.person_outline,
+        'Mes informations',
+        association == null
+            ? 'Coordonnées et compte'
+            : 'Coordonnées, compte et association',
+        () => _openPage(context, _ProfilePage.information),
+      ),
+      (
+        Icons.tune,
+        'Mes préférences',
+        isAdmin ? 'Position' : 'Catégories, distance, prix, position',
+        () => _openPage(context, _ProfilePage.preferences),
+      ),
+      if (!isAdmin) ...[
+        (
+          Icons.event_note_outlined,
+          'Mes réservations',
+          'Historique des réservations et retraits',
+          () => context.push(AppRoutes.myReservations),
+        ),
+        (
+          Icons.storefront_outlined,
+          'Mes offres',
+          'Offres publiées et leurs réservations',
+          () => context.push(AppRoutes.myOffers),
+        ),
+        (
+          Icons.eco_outlined,
+          'Mon impact',
+          'Produits sauvés, CO₂ évité',
+          () => context.push(AppRoutes.impact),
+        ),
+      ],
+      (
+        Icons.settings_outlined,
+        'Paramètres',
+        'Notifications, mot de passe',
+        () => _openPage(context, _ProfilePage.settings),
+      ),
+    ];
+    return Card(
+      child: Column(
+        children: [
+          for (final (index, (icon, title, subtitle, onTap))
+              in entries.indexed) ...[
+            if (index > 0) const Divider(indent: 56),
+            ListTile(
+              leading: Icon(icon, color: AppColors.primary),
+              title: Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: subtitle == null ? null : Text(subtitle),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: onTap,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Rubrique du profil : les sections correspondantes, à jour du profil.
+class _ProfileDetail extends ConsumerWidget {
+  const _ProfileDetail({required this.page, this.startEditing = false});
+
+  final _ProfilePage page;
+  final bool startEditing;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(profileProvider);
+    final isAdmin = profile?['role'] == 'admin';
+    final association = asJson(profile?['association']);
+
+    return Scaffold(
+      appBar: AppBar(title: Text(page.title)),
+      body: profile == null
+          ? _NoProfile(loggedIn: ref.watch(isLoggedInProvider))
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              children: [
+                ...switch (page) {
+                  _ProfilePage.information => [
+                    _IdentitySection(
+                      profile: profile,
+                      startEditing: startEditing,
+                    ),
+                    if (association != null)
+                      _AssociationSection(association: association),
+                  ],
+                  _ProfilePage.preferences => [
+                    if (!isAdmin) const _PreferencesSection(),
+                    _PositionSection(profile: profile),
+                  ],
+                  _ProfilePage.settings => [
+                    _NotificationsSection(isAdmin: isAdmin),
+                    _SecuritySection(profile: profile),
+                  ],
+                }.expand((section) => [section, const SizedBox(height: 16)]),
+              ],
             ),
     );
   }
@@ -190,14 +326,6 @@ String _roleLabel(String? role) => switch (role) {
   _ => 'Utilisateur',
 };
 
-/// Initiales du prénom et du nom (« Awa Traoré » → « AT »).
-String profileInitials(String name) {
-  final parts = name.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-  if (parts.isEmpty) return '?';
-  if (parts.length == 1) return parts.first[0].toUpperCase();
-  return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-}
-
 const _months = [
   'janvier',
   'février',
@@ -226,23 +354,7 @@ class _Header extends StatelessWidget {
 
     return Row(
       children: [
-        Container(
-          width: 64,
-          height: 64,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: AppColors.accent,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            profileInitials(name),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
+        ProfileAvatar(name: name, size: 72),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
@@ -255,10 +367,19 @@ class _Header extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
+              if (profile['email'] case final String email)
+                Text(
+                  email,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textMuted),
+                ),
               if (created != null)
                 Text(
                   'Membre depuis ${_months[created.month - 1]} ${created.year}',
-                  style: const TextStyle(color: AppColors.textMuted),
+                  style: const TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 12,
+                  ),
                 ),
               const SizedBox(height: 6),
               Wrap(
@@ -304,9 +425,12 @@ class _Badge extends StatelessWidget {
 
 /// Coordonnées : résumé, ou formulaire après appui sur le crayon.
 class _IdentitySection extends ConsumerStatefulWidget {
-  const _IdentitySection({required this.profile});
+  const _IdentitySection({required this.profile, this.startEditing = false});
 
   final Json profile;
+
+  /// Ouvre directement le formulaire (« Modifier le profil »).
+  final bool startEditing;
 
   @override
   ConsumerState<_IdentitySection> createState() => _IdentitySectionState();
@@ -319,6 +443,12 @@ class _IdentitySectionState extends ConsumerState<_IdentitySection> {
   final _phone = TextEditingController();
   var _editing = false;
   var _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.startEditing) _startEditing();
+  }
 
   @override
   void dispose() {
@@ -504,12 +634,6 @@ class _AssociationSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = association['status'] as String?;
-    final (statusLabel, statusColor) = switch (status) {
-      'approved' => ('Validée', AppColors.primary),
-      'rejected' => ('Refusée', AppColors.danger),
-      _ => ('En attente de validation', AppColors.accent),
-    };
     return _Section(
       title: 'Mon association',
       icon: Icons.groups_outlined,
@@ -529,18 +653,6 @@ class _AssociationSection extends StatelessWidget {
           label: 'Adresse',
           value: '${association['address'] ?? '—'}',
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Statut : $statusLabel',
-          style: TextStyle(color: statusColor, fontWeight: FontWeight.w700),
-        ),
-        if (status == 'pending')
-          const Text(
-            'Vous pourrez réserver dès la validation par un administrateur.',
-            style: TextStyle(color: AppColors.textMuted),
-          ),
-        if (status == 'rejected' && association['review_reason'] is String)
-          Text('Motif : ${association['review_reason']}'),
       ],
     );
   }
@@ -840,37 +952,6 @@ class _NotificationsSection extends ConsumerWidget {
             value: ref.watch(searchAlertsEnabledProvider),
             onChanged: (value) =>
                 _save(context, ref, 'search_alerts', value, 'Alertes'),
-          ),
-      ],
-    );
-  }
-}
-
-class _ActivitySection extends StatelessWidget {
-  const _ActivitySection();
-
-  @override
-  Widget build(BuildContext context) {
-    const links = [
-      (
-        Icons.history_outlined,
-        'Historique des réservations et retraits',
-        AppRoutes.myReservations,
-      ),
-      (Icons.storefront_outlined, 'Mes offres', AppRoutes.myOffers),
-      (Icons.eco_outlined, 'Mon impact', AppRoutes.impact),
-    ];
-    return _Section(
-      title: 'Mon activité',
-      icon: Icons.dashboard_customize_outlined,
-      children: [
-        for (final (icon, label, route) in links)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(icon),
-            title: Text(label),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push(route),
           ),
       ],
     );

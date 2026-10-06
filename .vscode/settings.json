@@ -1,9 +1,20 @@
 {
     "java.compile.nullAnalysis.mode": "automatic",
-    "java.configuration.updateBuildConfiguration": "interactive",
+    "java.configuration.updateBuildConfiguration": "disabled",
     "flutterTools.displayGetxContextMenu": false,
     "flutterTools.displayMobxContextMenu": false,
     "flutterTools.displayRiverpodContextMenu": true,
     "flutterTools.displayModularContextMenu": false,
-    "flutterTools.displaySignalsContextMenu": false
+    "flutterTools.displaySignalsContextMenu": false,
+    "java.import.gradle.enabled": false,
+    "java.import.maven.enabled": false,
+    "java.gradle.buildServer.enabled": "off",
+    "java.import.exclusions": [
+        "**/node_modules/**",
+        "**/.metadata/**",
+        "**/archetype-resources/**",
+        "**/META-INF/maven/**",
+        "**/android/**",
+        "**/build/**"
+    ]
 }

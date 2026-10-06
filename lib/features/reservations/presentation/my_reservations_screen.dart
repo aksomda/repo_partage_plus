@@ -454,6 +454,22 @@ class _ReceivedOrderTileState extends ConsumerState<_ReceivedOrderTile> {
                     ),
                   ),
                   StatusBadge(status),
+                  if (order['beneficiary_id'] case final int beneficiaryId)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: IconButton(
+                        tooltip: 'Écrire à $beneficiaryName',
+                        visualDensity: VisualDensity.compact,
+                        color: AppColors.primary,
+                        icon: const Icon(Icons.chat_bubble_outline),
+                        onPressed: () => context.push(
+                          AppRoutes.directConversation(
+                            beneficiaryId,
+                            offerId: (order['offer_id'] as num?)?.toInt(),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const Divider(height: 24),

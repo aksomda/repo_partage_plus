@@ -136,8 +136,8 @@ async function completeOfferIfDone(conn, offerId) {
   );
 }
 
-// Réserver une offre publiée par un compte, avec ou sans compte (association :
-// validée seulement). L'offre d'un invité ne se réserve pas : on l'appelle.
+// Réserver une offre publiée par un compte, avec ou sans compte (association
+// comprise, dès l'activation). L'offre d'un invité ne se réserve pas : on l'appelle.
 reservationsRouter.post('/', optionalAuth, async (req, res) => {
   const data = createSchema.parse(req.body);
   const guest = req.user ? null : guestReservationSchema.parse(req.body).guest;
@@ -145,14 +145,6 @@ reservationsRouter.post('/', optionalAuth, async (req, res) => {
 
   if (req.user?.role === 'admin') {
     throw new HttpError(403, 'Un administrateur ne réserve pas d’offres');
-  }
-  if (req.user?.role === 'association') {
-    const [association] = await query('SELECT status FROM associations WHERE user_id = ?', [
-      req.user.id,
-    ]);
-    if (association?.status !== 'approved') {
-      throw new HttpError(403, 'Association pas encore validée par un administrateur');
-    }
   }
 
   const { reservationId, guestToken } = await transaction(async (conn) => {

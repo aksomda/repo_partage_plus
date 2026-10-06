@@ -18,7 +18,8 @@ import { firebaseApp } from './firebase.js';
 /**
  * Tables copiées, avec les colonnes à ne jamais sortir de MySQL.
  * Non copiées : email_otps, guest_tokens (secrets), idempotency_keys
- * (technique), offer_photos et message_photos (images trop lourdes pour Firestore).
+ * (technique), offer_photos, message_photos et direct_message_photos (images
+ * trop lourdes pour Firestore).
  */
 export const MIRRORED_TABLES = {
   actors: {},
@@ -30,6 +31,7 @@ export const MIRRORED_TABLES = {
   reservations: {},
   notifications: {},
   messages: {},
+  direct_messages: {},
 };
 
 /**

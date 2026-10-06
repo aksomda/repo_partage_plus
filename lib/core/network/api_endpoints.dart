@@ -54,6 +54,12 @@ abstract final class ApiEndpoints {
   // Mini chat avec l'administration
   static const messages = '/messages';
   static const readMessages = '/messages/read';
+
+  // Messagerie entre utilisateurs (publieur et bénéficiaire)
+  static const directMessages = '/direct-messages';
+  static const readDirectMessages = '/direct-messages/read';
+  static String directMessagePhoto(int id, int position) =>
+      '/direct-messages/$id/photos/$position';
   static String messagePhoto(int id, int position) =>
       '/messages/$id/photos/$position';
 
@@ -74,8 +80,6 @@ abstract final class ApiEndpoints {
   static String moderateOffer(int id) => '/admin/offers/$id/moderation';
   static const adminUsers = '/admin/users';
   static String userStatus(int id) => '/admin/users/$id/status';
-  static const adminAssociations = '/admin/associations';
-  static String reviewAssociation(int id) => '/admin/associations/$id/review';
   static const adminCategories = '/admin/categories';
   static String adminCategory(int id) => '/admin/categories/$id';
   static const adminActors = '/admin/actors';

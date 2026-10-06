@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS associations (
   name VARCHAR(150) NOT NULL,
   registration_number VARCHAR(80) NULL,
   address VARCHAR(255) NULL,
-  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+  -- Plus de validation par l'administrateur : toute association est active
+  -- dès l'activation du compte (colonne gardée pour les anciennes bases).
+  status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved',
   review_reason VARCHAR(255) NULL,
   reviewed_by INT UNSIGNED NULL,
   reviewed_at DATETIME NULL,
@@ -288,6 +290,37 @@ CREATE TABLE IF NOT EXISTS message_photos (
   data MEDIUMBLOB NOT NULL,
   PRIMARY KEY (message_id, position),
   CONSTRAINT fk_message_photos_message FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Messagerie entre utilisateurs avec compte : un bénéficiaire écrit au
+-- publieur d'une offre (commerçant, restaurateur, association…), qui répond.
+-- offer_id : offre dont on parle (fiche détail), facultative ensuite.
+CREATE TABLE IF NOT EXISTS direct_messages (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  sender_id INT UNSIGNED NOT NULL,
+  recipient_id INT UNSIGNED NOT NULL,
+  offer_id INT UNSIGNED NULL,
+  body VARCHAR(2000) NULL,
+  photos_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  -- Lu par le destinataire.
+  read_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_direct_messages_sender (sender_id, id),
+  KEY idx_direct_messages_recipient (recipient_id, read_at),
+  CONSTRAINT fk_direct_messages_sender FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_direct_messages_recipient FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_direct_messages_offer FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE SET NULL
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Images jointes à un message entre utilisateurs (JPEG, PNG ou WebP).
+CREATE TABLE IF NOT EXISTS direct_message_photos (
+  message_id INT UNSIGNED NOT NULL,
+  position TINYINT UNSIGNED NOT NULL,
+  mime VARCHAR(30) NOT NULL,
+  data MEDIUMBLOB NOT NULL,
+  PRIMARY KEY (message_id, position),
+  CONSTRAINT fk_direct_message_photos_message FOREIGN KEY (message_id) REFERENCES direct_messages (id) ON DELETE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- Jetons Firebase Cloud Messaging des appareils connectés : une notification

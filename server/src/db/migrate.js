@@ -99,6 +99,11 @@ async function upgrade(conn) {
     NOT NULL DEFAULT 'published'`);
   await conn.query("UPDATE offers SET status = 'published' WHERE status = 'pending'");
   await conn.query('ALTER TABLE reservations MODIFY beneficiary_id INT UNSIGNED NULL');
+  // Associations : plus de validation par l'administrateur, actives dès
+  // l'activation du compte.
+  await conn.query(`ALTER TABLE associations MODIFY status
+    ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved'`);
+  await conn.query("UPDATE associations SET status = 'approved' WHERE status <> 'approved'");
 
   await conn.query(`ALTER TABLE users
     MODIFY password_hash VARCHAR(255) NULL,

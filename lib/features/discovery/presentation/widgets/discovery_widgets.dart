@@ -10,8 +10,6 @@ import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
-import 'package:repo_partage_plus/core/widgets/text_prompt_dialog.dart';
-import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
@@ -466,25 +464,82 @@ final offerFiltersProvider =
       OfferFiltersController.new,
     );
 
-/// Liste d'offres avec recherche, catégories, rayon, prix, urgence et tri
-/// (accueil, recherche). Les filtres sont mémorisés sur l'appareil.
-class OffersBrowser extends ConsumerStatefulWidget {
-  const OffersBrowser({super.key, this.header, this.autofocusSearch = false});
+/// Nombre de critères actifs autres que le texte et la catégorie (pastille
+/// du bouton « Filtres »).
+int activeRefinements(OfferFilters filters) => [
+  filters.radiusKm.isFinite,
+  filters.price != PriceFilter.all,
+  filters.urgentOnly,
+  filters.sort != OfferSort.nearest,
+  filters.owner != OfferOwner.all,
+  filters.favoritesOnly,
+].where((active) => active).length;
 
-  /// Contenu affiché au-dessus des filtres (bannière de l'accueil).
+/// Bouton « Filtres » (maquette) : ouvre l'écran des filtres ; pastille du
+/// nombre de critères actifs.
+class FiltersButton extends ConsumerWidget {
+  const FiltersButton({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = activeRefinements(ref.watch(offerFiltersProvider));
+    return IconButton.filledTonal(
+      tooltip: 'Filtres',
+      style: IconButton.styleFrom(
+        backgroundColor: AppColors.primarySoft,
+        foregroundColor: AppColors.primary,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radius),
+        ),
+        minimumSize: const Size(48, 48),
+      ),
+      icon: Badge.count(
+        count: count,
+        isLabelVisible: count > 0,
+        child: const Icon(Icons.tune),
+      ),
+      onPressed: () => context.push(AppRoutes.filters),
+    );
+  }
+}
+
+/// Liste d'offres (accueil, « Offres disponibles ») ; les filtres sont
+/// partagés avec la carte et mémorisés sur l'appareil.
+///
+/// [searchBar] : champ de recherche, bouton « Filtres » et puces de
+/// catégories (écran « Offres disponibles ») ; l'accueil les remplace par
+/// son propre [header].
+class OffersBrowser extends ConsumerStatefulWidget {
+  const OffersBrowser({
+    super.key,
+    this.header,
+    this.searchBar = true,
+    this.autofocusSearch = false,
+    this.onSeeAll,
+  });
+
+  /// Contenu affiché au-dessus de la liste (bannière de l'accueil).
   final Widget? header;
+  final bool searchBar;
   final bool autofocusSearch;
+
+  /// Lien « Voir tout » à droite du titre de la liste.
+  final VoidCallback? onSeeAll;
 
   @override
   ConsumerState<OffersBrowser> createState() => _OffersBrowserState();
 }
 
 class _OffersBrowserState extends ConsumerState<OffersBrowser> {
-  late final _search = TextEditingController(
-    text: ref.read(offerFiltersProvider).text,
-  );
+  late final TextEditingController _search;
 
   OfferFilters get _filters => ref.read(offerFiltersProvider);
+
+  @override
+  void initState() {
+    super.initState();
+    _search = TextEditingController(text: _filters.text);
+  }
 
   @override
   void dispose() {
@@ -502,6 +557,10 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
   @override
   Widget build(BuildContext context) {
     ref.watch(offerFiltersProvider);
+    // Texte changé ailleurs (écran des filtres, recherche enregistrée).
+    ref.listen(offerFiltersProvider, (_, next) {
+      if (_search.text != next.text) _search.text = next.text;
+    });
     final origin = ref.watch(originProvider).place;
     final loggedIn = ref.watch(authTokenProvider) != null;
     final mine = <Json>[
@@ -533,133 +592,77 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
       child: CustomScrollView(
         slivers: [
           if (widget.header != null) SliverToBoxAdapter(child: widget.header),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: TextField(
-                controller: _search,
-                autofocus: widget.autofocusSearch,
-                textInputAction: TextInputAction.search,
-                onChanged: (value) => ref
-                    .read(offerFiltersProvider.notifier)
-                    .apply(_filters.copyWith(text: value)),
-                decoration: InputDecoration(
-                  hintText: 'Rechercher un produit, une catégorie…',
-                  prefixIcon: const Icon(Icons.search),
-                  isDense: true,
-                  suffixIcon: _filters.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Effacer',
-                          onPressed: () => _apply(_filters.copyWith(text: '')),
-                        ),
-                ),
-              ),
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: CategoryFilterChips(filters: _filters, onApply: _apply),
-          ),
-          SliverToBoxAdapter(
-            child: RefineFilterBar(
-              filters: _filters,
-              onApply: _apply,
-              onReset: _reset,
-              hasOrigin: origin != null,
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: _FavoritesBar(
-              favorites: favorites,
-              filters: _filters,
-              onApply: (filters) {
-                _search.text = filters.text;
-                _apply(filters);
-              },
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-              child: SegmentedButton<OfferOwner>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(
-                    value: OfferOwner.all,
-                    label: Text('Toutes'),
-                    icon: Icon(Icons.storefront_outlined),
-                  ),
-                  ButtonSegment(
-                    value: OfferOwner.mine,
-                    label: Text('Mes offres'),
-                    icon: Icon(Icons.person_outline),
-                  ),
-                  ButtonSegment(
-                    value: OfferOwner.others,
-                    label: Text('Des autres'),
-                    icon: Icon(Icons.groups_outlined),
-                  ),
-                ],
-                selected: {_filters.owner},
-                onSelectionChanged: (selection) =>
-                    _apply(_filters.copyWith(owner: selection.first)),
-              ),
-            ),
-          ),
-          // Mes offres : toutes affichées, quel que soit le rayon.
-          if (origin != null && !showMine)
+          if (widget.searchBar) ...[
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.radar,
-                      size: 18,
-                      color: AppColors.textMuted,
-                    ),
-                    const SizedBox(width: 6),
-                    const Text(
-                      'Rayon',
-                      style: TextStyle(color: AppColors.textMuted),
-                    ),
                     Expanded(
-                      child: Slider(
-                        value: searchRadii
-                            .indexOf(_filters.radiusKm)
-                            .toDouble(),
-                        max: (searchRadii.length - 1).toDouble(),
-                        divisions: searchRadii.length - 1,
-                        label: radiusLabel(_filters.radiusKm),
-                        onChanged: (value) => _apply(
-                          _filters.copyWith(
-                            radiusKm: searchRadii[value.round()],
-                          ),
+                      child: TextField(
+                        controller: _search,
+                        autofocus: widget.autofocusSearch,
+                        textInputAction: TextInputAction.search,
+                        onChanged: (value) => ref
+                            .read(offerFiltersProvider.notifier)
+                            .apply(_filters.copyWith(text: value)),
+                        decoration: InputDecoration(
+                          hintText: 'Rechercher un produit, une catégorie…',
+                          prefixIcon: const Icon(Icons.search),
+                          isDense: true,
+                          suffixIcon: _filters.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: const Icon(Icons.close),
+                                  tooltip: 'Effacer',
+                                  onPressed: () =>
+                                      _apply(_filters.copyWith(text: '')),
+                                ),
                         ),
                       ),
                     ),
-                    Text(
-                      radiusLabel(_filters.radiusKm),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
+                    const SizedBox(width: 8),
+                    const FiltersButton(),
                   ],
                 ),
               ),
             ),
+            SliverToBoxAdapter(
+              child: CategoryFilterChips(filters: _filters, onApply: _apply),
+            ),
+          ],
+          SliverToBoxAdapter(
+            child: ActiveFiltersBar(filters: _filters, onApply: _apply),
+          ),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Text(
-                showMine
-                    ? 'Mes offres (${offers.length})'
-                    : origin == null
-                    ? 'Offres disponibles (${offers.length})'
-                    : 'Offres à proximité (${offers.length})',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                4,
+                widget.onSeeAll == null ? 16 : 4,
+                8,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      showMine
+                          ? 'Mes offres (${offers.length})'
+                          : origin == null
+                          ? 'Offres disponibles (${offers.length})'
+                          : 'Offres à proximité (${offers.length})',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  if (widget.onSeeAll != null)
+                    TextButton(
+                      onPressed: widget.onSeeAll,
+                      child: const Text('Voir tout'),
+                    ),
+                ],
               ),
             ),
           ),
@@ -714,8 +717,7 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
                                     'départ ou de catégorie.',
                         ),
                         if (_filters.isSearch ||
-                            _filters.hasRefinements ||
-                            _filters.favoritesOnly)
+                            activeRefinements(_filters) > 0)
                           TextButton.icon(
                             onPressed: _reset,
                             icon: const Icon(Icons.filter_alt_off_outlined),
@@ -744,6 +746,117 @@ class _OffersBrowserState extends ConsumerState<OffersBrowser> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Catégories en pastilles rondes, icône au-dessus du nom (accueil et
+/// écran des filtres, maquette) ; toucher la catégorie choisie la retire.
+class CategoryCircles extends ConsumerWidget {
+  const CategoryCircles({
+    super.key,
+    required this.filters,
+    required this.onApply,
+    this.wrap = false,
+  });
+
+  final OfferFilters filters;
+  final ValueChanged<OfferFilters> onApply;
+
+  /// Sur plusieurs lignes (écran des filtres) plutôt qu'en bande défilante.
+  final bool wrap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final categories = ref.watch(categoriesProvider);
+    final items = [
+      for (final category in categories)
+        _CategoryCircle(
+          label: category['name'] as String,
+          icon: categoryIcon(category['icon']),
+          background: categoryColor(category['id']),
+          selected: filters.categoryId == category['id'],
+          onTap: () => onApply(
+            filters.copyWith(
+              categoryId: () => filters.categoryId == category['id']
+                  ? null
+                  : category['id'] as int,
+            ),
+          ),
+        ),
+    ];
+    if (wrap) return Wrap(spacing: 4, runSpacing: 8, children: items);
+    return SizedBox(
+      height: 104,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        children: items,
+      ),
+    );
+  }
+}
+
+class _CategoryCircle extends StatelessWidget {
+  const _CategoryCircle({
+    required this.label,
+    required this.icon,
+    required this.background,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color background;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        child: SizedBox(
+          width: 80,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: selected ? AppColors.primary : background,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    color: selected ? Colors.white : AppColors.primary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  maxLines: 2,
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.2,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? AppColors.primary : AppColors.text,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -779,29 +892,16 @@ class CategoryFilterChips extends ConsumerWidget {
               category['name'] as String,
               filters.categoryId == category['id'],
               () => filters.copyWith(categoryId: () => category['id'] as int),
-              icon: categoryIcon(category['icon']),
             ),
         ],
       ),
     );
   }
 
-  Widget _chip(
-    String label,
-    bool selected,
-    OfferFilters Function() apply, {
-    IconData? icon,
-  }) {
+  Widget _chip(String label, bool selected, OfferFilters Function() apply) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ChoiceChip(
-        avatar: icon == null
-            ? null
-            : Icon(
-                icon,
-                size: 18,
-                color: selected ? Colors.white : AppColors.primary,
-              ),
         label: Text(label),
         selected: selected,
         labelStyle: TextStyle(color: selected ? Colors.white : AppColors.text),
@@ -811,280 +911,87 @@ class CategoryFilterChips extends ConsumerWidget {
   }
 }
 
-/// Prix (gratuit / prix réduit), urgence et tri ; sur la carte ([onMap]),
-/// aussi le texte cherché et le rayon.
-class RefineFilterBar extends StatelessWidget {
-  const RefineFilterBar({
+/// Critères actifs autres que le texte et la catégorie, chacun retirable
+/// d'un geste, et « Effacer » pour tout retirer. Rien si aucun.
+class ActiveFiltersBar extends StatelessWidget {
+  const ActiveFiltersBar({
     super.key,
     required this.filters,
     required this.onApply,
-    required this.onReset,
-    required this.hasOrigin,
-    this.onMap = false,
   });
 
   final OfferFilters filters;
   final ValueChanged<OfferFilters> onApply;
-  final VoidCallback onReset;
-  final bool hasOrigin;
-  final bool onMap;
 
   @override
   Widget build(BuildContext context) {
-    Widget toggle(
-      String label,
-      IconData icon,
-      bool selected,
-      OfferFilters Function(bool) apply,
-    ) {
-      return Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: FilterChip(
-          avatar: Icon(icon, size: 18),
-          label: Text(label),
-          selected: selected,
-          showCheckmark: false,
-          onSelected: (on) => onApply(apply(on)),
+    final active = [
+      if (filters.radiusKm.isFinite)
+        (
+          Icons.radar,
+          'Rayon : ${radiusLabel(filters.radiusKm)}',
+          () => filters.copyWith(radiusKm: unlimitedRadius),
         ),
-      );
-    }
-
+      if (filters.price != PriceFilter.all)
+        (
+          Icons.sell_outlined,
+          filters.price.label,
+          () => filters.copyWith(price: PriceFilter.all),
+        ),
+      if (filters.urgentOnly)
+        (
+          Icons.timer_outlined,
+          'À sauver vite',
+          () => filters.copyWith(urgentOnly: false),
+        ),
+      if (filters.sort != OfferSort.nearest)
+        (
+          Icons.sort,
+          'Tri : ${filters.sort.label.toLowerCase()}',
+          () => filters.copyWith(sort: OfferSort.nearest),
+        ),
+      if (filters.owner != OfferOwner.all)
+        (
+          Icons.person_outline,
+          filters.owner == OfferOwner.mine ? 'Mes offres' : 'Des autres',
+          () => filters.copyWith(owner: OfferOwner.all),
+        ),
+      if (filters.favoritesOnly)
+        (
+          Icons.favorite,
+          'Favoris',
+          () => filters.copyWith(favoritesOnly: false),
+        ),
+    ];
+    if (active.isEmpty) return const SizedBox.shrink();
     return SizedBox(
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         children: [
-          if (onMap && filters.text.trim().isNotEmpty)
+          for (final (icon, label, remove) in active)
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: InputChip(
-                avatar: const Icon(Icons.search, size: 18),
-                label: Text('« ${filters.text.trim()} »'),
+                avatar: Icon(icon, size: 18, color: AppColors.primary),
+                label: Text(label),
+                backgroundColor: AppColors.primarySoft,
+                side: BorderSide.none,
                 deleteButtonTooltipMessage: 'Retirer',
-                onDeleted: () => onApply(filters.copyWith(text: '')),
+                onDeleted: () => onApply(remove()),
               ),
             ),
-          if (onMap && hasOrigin)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: PopupMenuButton<double>(
-                tooltip: 'Rayon',
-                initialValue: filters.radiusKm,
-                onSelected: (radius) =>
-                    onApply(filters.copyWith(radiusKm: radius)),
-                itemBuilder: (_) => [
-                  for (final radius in searchRadii)
-                    PopupMenuItem(
-                      value: radius,
-                      child: Text(radiusLabel(radius)),
-                    ),
-                ],
-                child: Chip(
-                  avatar: const Icon(Icons.radar, size: 18),
-                  label: Text('Rayon : ${radiusLabel(filters.radiusKm)}'),
-                ),
+          ActionChip(
+            avatar: const Icon(Icons.filter_alt_off_outlined, size: 18),
+            label: const Text('Effacer'),
+            onPressed: () => onApply(
+              const OfferFilters().copyWith(
+                text: filters.text,
+                categoryId: () => filters.categoryId,
               ),
-            ),
-          if (!onMap)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: PopupMenuButton<OfferSort>(
-                tooltip: 'Trier',
-                initialValue: filters.sort,
-                onSelected: (sort) => onApply(filters.copyWith(sort: sort)),
-                itemBuilder: (_) => [
-                  for (final sort in OfferSort.values)
-                    PopupMenuItem(
-                      value: sort,
-                      enabled: sort != OfferSort.nearest || hasOrigin,
-                      child: Text(sort.label),
-                    ),
-                ],
-                child: Chip(
-                  avatar: const Icon(Icons.sort, size: 18),
-                  label: Text('Tri : ${filters.sort.label.toLowerCase()}'),
-                ),
-              ),
-            ),
-          toggle(
-            PriceFilter.free.label,
-            Icons.volunteer_activism_outlined,
-            filters.price == PriceFilter.free,
-            (on) => filters.copyWith(
-              price: on ? PriceFilter.free : PriceFilter.all,
             ),
           ),
-          toggle(
-            PriceFilter.paid.label,
-            Icons.sell_outlined,
-            filters.price == PriceFilter.paid,
-            (on) => filters.copyWith(
-              price: on ? PriceFilter.paid : PriceFilter.all,
-            ),
-          ),
-          toggle(
-            'À sauver vite',
-            Icons.timer_outlined,
-            filters.urgentOnly,
-            (on) => filters.copyWith(urgentOnly: on),
-          ),
-          if (filters.isSearch || filters.hasRefinements)
-            ActionChip(
-              avatar: const Icon(Icons.filter_alt_off_outlined, size: 18),
-              label: const Text('Effacer'),
-              onPressed: onReset,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Favoris (sans compte aussi) : filtre « offres favorites », recherches
-/// enregistrées (relancées d'un geste, supprimables par leur croix),
-/// recherches suggérées, et enregistrement de la recherche en cours.
-class _FavoritesBar extends ConsumerWidget {
-  const _FavoritesBar({
-    required this.favorites,
-    required this.filters,
-    required this.onApply,
-  });
-
-  final Favorites favorites;
-  final OfferFilters filters;
-  final ValueChanged<OfferFilters> onApply;
-
-  Future<void> _save(BuildContext context, WidgetRef ref) async {
-    final categories = ref.read(categoriesProvider);
-    final category = categories
-        .where((c) => c['id'] == filters.categoryId)
-        .firstOrNull;
-    final suggested = [
-      if (filters.text.trim().isNotEmpty) filters.text.trim(),
-      if (category != null) category['name'],
-      if (filters.price != PriceFilter.all) filters.price.label,
-      if (filters.urgentOnly) 'urgent',
-    ].join(' · ');
-    final name = await _askName(context, suggested);
-    if (name == null) return;
-    await ref
-        .read(favoritesProvider.notifier)
-        .saveSearch(
-          SavedSearch(
-            name: name,
-            text: filters.text.trim(),
-            categoryId: filters.categoryId,
-            radiusKm: filters.radiusKm,
-            price: filters.price,
-            urgentOnly: filters.urgentOnly,
-          ),
-        );
-    if (context.mounted) {
-      showMessage(
-        context,
-        'Recherche « $name » enregistrée : vous serez prévenu des nouvelles '
-        'offres correspondantes',
-      );
-    }
-  }
-
-  Future<String?> _askName(BuildContext context, String suggested) {
-    return showTextPrompt(
-      context,
-      title: 'Enregistrer la recherche',
-      action: 'Enregistrer',
-      hint: 'Nom (ex. : Pain du soir)',
-      initial: suggested,
-      maxLength: 40,
-      emptyMessage: 'Donnez un nom à la recherche',
-    );
-  }
-
-  Future<void> _remove(
-    BuildContext context,
-    WidgetRef ref,
-    SavedSearch search,
-  ) async {
-    final notifier = ref.read(favoritesProvider.notifier);
-    await notifier.removeSearch(search.name);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('Recherche « ${search.name} » supprimée'),
-          action: SnackBarAction(
-            label: 'Annuler',
-            onPressed: () => notifier.saveSearch(search),
-          ),
-        ),
-      );
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final count = favorites.offerIds.length;
-    final saved = {
-      for (final search in favorites.searches) search.name.toLowerCase(),
-    };
-    return SizedBox(
-      height: 48,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: FilterChip(
-              avatar: Icon(
-                filters.favoritesOnly ? Icons.favorite : Icons.favorite_border,
-                size: 18,
-                color: AppColors.danger,
-              ),
-              label: Text('Favoris ($count)'),
-              tooltip: count == 0
-                  ? 'Touchez le cœur d’une offre pour l’ajouter'
-                  : null,
-              selected: filters.favoritesOnly,
-              showCheckmark: false,
-              onSelected: (value) =>
-                  onApply(filters.copyWith(favoritesOnly: value)),
-            ),
-          ),
-          for (final search in favorites.searches)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: InputChip(
-                avatar: const Icon(Icons.bookmark_outline, size: 18),
-                label: Text(search.name),
-                tooltip: 'Relancer cette recherche',
-                deleteButtonTooltipMessage: 'Supprimer',
-                onPressed: () => onApply(filters.withSearch(search)),
-                onDeleted: () => _remove(context, ref, search),
-              ),
-            ),
-          if (filters.isSearch)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ActionChip(
-                avatar: const Icon(Icons.bookmark_add_outlined, size: 18),
-                label: const Text('Enregistrer la recherche'),
-                onPressed: () => _save(context, ref),
-              ),
-            ),
-          // Suggestions : recherches prêtes à l'emploi, même sans compte.
-          for (final search in suggestedSearches)
-            if (!saved.contains(search.name.toLowerCase()))
-              Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: ActionChip(
-                  avatar: const Icon(Icons.lightbulb_outline, size: 18),
-                  label: Text(search.name),
-                  tooltip: 'Recherche suggérée',
-                  onPressed: () => onApply(filters.withSearch(search)),
-                ),
-              ),
         ],
       ),
     );

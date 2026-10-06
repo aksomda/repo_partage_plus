@@ -63,7 +63,7 @@ final implementedScreens = {
   AppRoutes.splash: 'Commencer',
   AppRoutes.login: 'Se connecter',
   AppRoutes.register: 'Choisissez votre rôle',
-  AppRoutes.home: 'Publier une offre',
+  AppRoutes.home: 'Voir les offres autour de vous',
   AppRoutes.pickup('1'): 'Valider le retrait',
 };
 
@@ -624,12 +624,12 @@ void main() {
           find.byType(CustomScrollView),
           const Offset(0, -200),
         );
+        expect(find.text('250 F CFA'), findsOneWidget);
         await tester.dragUntilVisible(
           find.text('Pains du jour'),
           find.byType(CustomScrollView),
           const Offset(0, -200),
         );
-        expect(find.text('250 F CFA'), findsOneWidget);
         // Rayon illimité par défaut : l'offre lointaine aussi, après les proches.
         await tester.dragUntilVisible(
           find.text('Offre lointaine'),
@@ -688,8 +688,17 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Référence de la transaction'), findsOneWidget);
-        expect(find.text('Téléphone *'), findsOneWidget);
         expect(find.text('À payer : 250 F CFA'), findsOneWidget);
+        await tester.dragUntilVisible(
+          find.text('Téléphone *'),
+          find.byType(ListView),
+          const Offset(0, -200),
+        );
+        await tester.dragUntilVisible(
+          find.byTooltip('Plus'),
+          find.byType(ListView),
+          const Offset(0, 200),
+        );
 
         await tester.tap(find.byTooltip('Plus'));
         await tester.pumpAndSettle();

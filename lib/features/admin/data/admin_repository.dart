@@ -25,17 +25,6 @@ final moderationOffersProvider = Provider<List<Json>>((ref) {
   ).where((offer) => !handled.contains(offer['id'])).toList();
 });
 
-/// Associations à valider, sans celles déjà traitées hors ligne.
-final pendingAssociationsProvider = Provider<List<Json>>((ref) {
-  final handled = {
-    for (final action in ref.watch(waitingActionsProvider))
-      if (action.kind == 'association.review') action.targetId,
-  };
-  return asJsonList(
-    _adminSnapshot(ref)?['pending_associations'],
-  ).where((association) => !handled.contains(association['id'])).toList();
-});
-
 /// Acteurs configurés, y compris ceux modifiés hors ligne pas encore envoyés.
 final actorsProvider = Provider<List<Json>>(
   (ref) => asJsonList(_adminSnapshot(ref)?['actors']),
@@ -226,24 +215,6 @@ class AdminRepository {
         body: {'decision': 'reject', 'reason': reason},
         targetId: offer['id'] as int,
         label: 'Retrait de « ${offer['title']} »',
-      ),
-    );
-  }
-
-  Future<SubmitResult> reviewAssociation(
-    Json association, {
-    required bool approve,
-    String? reason,
-  }) {
-    return _sync.submit(
-      PendingAction(
-        kind: 'association.review',
-        method: 'PATCH',
-        path: ApiEndpoints.reviewAssociation(association['id'] as int),
-        body: {'decision': approve ? 'approve' : 'reject', 'reason': ?reason},
-        targetId: association['id'] as int,
-        label:
-            '${approve ? 'Validation' : 'Refus'} de « ${association['name']} »',
       ),
     );
   }

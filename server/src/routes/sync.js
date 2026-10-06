@@ -7,6 +7,7 @@ import { donorInsights } from '../services/insights.js';
 import { loadSettings } from '../services/settings.js';
 import { loadStats, USER_SELECT } from './admin.js';
 import { loadProfile } from './auth.js';
+import { loadDirectMessages } from './direct_messages.js';
 import { MESSAGE_SELECT } from './messages.js';
 import { buildDashboard, buildGlobalImpact, publicImpact } from './impact.js';
 import { forViewer, RESERVATION_SELECT } from './reservations.js';
@@ -63,6 +64,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     myOffers,
     notifications,
     messages,
+    directMessages,
     dashboard,
     platformImpact,
   ] = await Promise.all([
@@ -95,6 +97,8 @@ syncRouter.get('/', authenticate, async (req, res) => {
           userId,
           MAX_MESSAGES,
         ]),
+    // Échanges avec les publieurs ou bénéficiaires (pas pour l'administration).
+    isAdmin ? [] : loadDirectMessages(userId),
     buildDashboard(userId),
     publicImpact(),
   ]);
@@ -107,11 +111,6 @@ syncRouter.get('/', authenticate, async (req, res) => {
         moderation_offers: await query(
           `${OFFER_SELECT} WHERE o.status IN ('published', 'reserved') ORDER BY o.created_at DESC LIMIT ?`,
           [MAX_OFFERS],
-        ),
-        pending_associations: await query(
-          `SELECT a.*, u.name AS user_name, u.email, u.phone
-           FROM associations a JOIN users u ON u.id = a.user_id
-           WHERE a.status = 'pending' ORDER BY a.created_at ASC`,
         ),
         actors: await query(
           `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
@@ -147,6 +146,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
     offer_insights: offerInsights,
     notifications,
     messages,
+    direct_messages: directMessages,
     // Compteurs, évolution sur 12 mois, catégories et indicateurs sociaux :
     // gardés sur l'appareil pour l'écran « Mon impact » hors ligne.
     impact: dashboard.impact,

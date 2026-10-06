@@ -122,7 +122,7 @@ before(async () => {
   tokens.admin = await login('admin@demo.local');
   tokens.donor = await login('commerce@demo.local');
   tokens.beneficiary = await login('beneficiaire@demo.local');
-  tokens.pendingAssociation = await login('association2@demo.local');
+  tokens.association = await login('association2@demo.local');
 });
 
 after(async () => {
@@ -469,12 +469,25 @@ describe('parcours offre → réservation → retrait', () => {
     assert.equal(res.status, 400);
   });
 
-  test('une association non validée ne peut pas réserver', async () => {
+  test('une association réserve dès l’activation, sans validation par l’admin', async () => {
+    const [category] = (await api.get('/api/categories')).body;
+    const offer = await api.post('/api/offers').set(as('donor')).send({
+      category_id: category.id,
+      title: 'Pour une association',
+      quantity: 4,
+      expiry_date: tomorrow(),
+      pickup_start: futureIso(-1),
+      pickup_end: futureIso(5),
+      address: '1 rue du Test',
+      latitude: 12.3714,
+      longitude: -1.5197,
+    });
+    assert.equal(offer.status, 201, offer.text);
     const res = await api
       .post('/api/reservations')
-      .set(as('pendingAssociation'))
-      .send({ offer_id: offerId, quantity: 1 });
-    assert.equal(res.status, 403);
+      .set(as('association'))
+      .send({ offer_id: offer.body.id, quantity: 2 });
+    assert.equal(res.status, 201, res.text);
   });
 
   test('le bénéficiaire réserve, le donateur ne voit pas le code', async () => {
@@ -1008,19 +1021,6 @@ describe('administration', () => {
     assert.equal(edit.status, 409);
   });
 
-  test("validation d'une association", async () => {
-    const pending = await api.get('/api/admin/associations').set(as('admin'));
-    assert.equal(pending.status, 200);
-    const [association] = pending.body;
-
-    const res = await api
-      .patch(`/api/admin/associations/${association.id}/review`)
-      .set(as('admin'))
-      .send({ decision: 'approve' });
-    assert.equal(res.status, 200);
-    assert.equal(res.body.status, 'approved');
-  });
-
   test('désactivation de compte : connexion refusée, Firebase désactivé', async () => {
     const users = await api.get('/api/admin/users?q=nouveau@test.local').set(as('admin'));
     const [user] = users.body;
@@ -1333,6 +1333,129 @@ describe('mini chat avec l’administration', () => {
         (n) => n.type === 'message' && n.body === '📷 1 image',
       ),
     );
+  });
+});
+
+describe('messagerie entre utilisateurs (fiche détail)', () => {
+  // PNG 1×1 valide.
+  const png =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const userId = async (email) => {
+    const [[user]] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
+    return user.id;
+  };
+  const offerOf = async (donorId) => {
+    const [[offer]] = await pool.query('SELECT id FROM offers WHERE donor_id = ? LIMIT 1', [
+      donorId,
+    ]);
+    return offer.id;
+  };
+
+  test('réservé aux comptes : sans session, 401', async () => {
+    assert.equal((await api.get('/api/direct-messages')).status, 401);
+    const res = await api.post('/api/direct-messages').send({ recipient_id: 1, body: 'Bonjour' });
+    assert.equal(res.status, 401);
+  });
+
+  test('bénéficiaire → publieur depuis son offre, réponse, lecture, images', async () => {
+    const donorId = await userId('commerce@demo.local');
+    const beneficiaryId = await userId('beneficiaire@demo.local');
+    const offerId = await offerOf(donorId);
+
+    const sent = await api
+      .post('/api/direct-messages')
+      .set(as('beneficiary'))
+      .send({ recipient_id: donorId, offer_id: offerId, body: 'Reste-t-il du pain ?' });
+    assert.equal(sent.status, 201, sent.text);
+    assert.equal(sent.body.sender_id, beneficiaryId);
+    assert.equal(sent.body.offer_id, offerId);
+    assert.ok(sent.body.offer_title);
+    assert.equal(sent.body.recipient_actor, 'Commerçant');
+
+    // Le publieur est notifié (push compris), avec de quoi ouvrir l'échange.
+    const [[notification]] = await pool.query(
+      `SELECT * FROM notifications WHERE user_id = ? AND type = 'direct_message'
+       ORDER BY id DESC LIMIT 1`,
+      [donorId],
+    );
+    assert.equal(notification.title, 'Message de Awa Bénéficiaire');
+    const data =
+      typeof notification.data === 'string' ? JSON.parse(notification.data) : notification.data;
+    assert.equal(data.peer_id, beneficiaryId);
+
+    // Réponse sans citer d'offre : la conversation existe déjà.
+    const reply = await api
+      .post('/api/direct-messages')
+      .set(as('donor'))
+      .send({ recipient_id: beneficiaryId, body: 'Oui, venez avant 19h', photos: [png] });
+    assert.equal(reply.status, 201, reply.text);
+    assert.equal(reply.body.photos_count, 1);
+
+    const photo = await api
+      .get(`/api/direct-messages/${reply.body.id}/photos/0`)
+      .set(as('beneficiary'));
+    assert.equal(photo.status, 200);
+    assert.equal(photo.headers['content-type'], 'image/png');
+    const stranger = await api
+      .get(`/api/direct-messages/${reply.body.id}/photos/0`)
+      .set(as('association'));
+    assert.equal(stranger.status, 404);
+
+    // Copiés sur l'appareil des deux participants, pas sur celui de l'admin.
+    const sync = await api.get('/api/sync').set(as('beneficiary'));
+    const ids = sync.body.direct_messages.map((m) => m.id);
+    assert.ok(ids.includes(sent.body.id) && ids.includes(reply.body.id));
+    const adminSync = await api.get('/api/sync').set(as('admin'));
+    assert.deepEqual(adminSync.body.direct_messages, []);
+    const strangerList = await api.get('/api/direct-messages').set(as('association'));
+    assert.ok(strangerList.body.every((m) => m.id !== sent.body.id));
+
+    // Lecture : seuls les messages reçus de ce correspondant.
+    const read = await api
+      .patch('/api/direct-messages/read')
+      .set(as('beneficiary'))
+      .send({ peer_id: donorId });
+    assert.equal(read.status, 204);
+    const thread = await api
+      .get(`/api/direct-messages?peer_id=${donorId}`)
+      .set(as('beneficiary'));
+    const byId = Object.fromEntries(thread.body.map((m) => [m.id, m]));
+    assert.ok(byId[reply.body.id].read_at);
+    assert.equal(byId[sent.body.id].read_at, null);
+  });
+
+  test('refusé : offre d’un autre, administrateur, soi-même, message vide', async () => {
+    const donorId = await userId('commerce@demo.local');
+    const restaurantOffer = await offerOf(await userId('restaurant@demo.local'));
+    const adminId = await userId('admin@demo.local');
+    const beneficiaryId = await userId('beneficiaire@demo.local');
+
+    const otherOffer = await api
+      .post('/api/direct-messages')
+      .set(as('association'))
+      .send({ recipient_id: donorId, offer_id: restaurantOffer, body: 'Bonjour' });
+    assert.equal(otherOffer.status, 403);
+    const toAdmin = await api
+      .post('/api/direct-messages')
+      .set(as('beneficiary'))
+      .send({ recipient_id: adminId, body: 'Bonjour' });
+    assert.equal(toAdmin.status, 404);
+    const toSelf = await api
+      .post('/api/direct-messages')
+      .set(as('beneficiary'))
+      .send({ recipient_id: beneficiaryId, body: 'Bonjour' });
+    assert.equal(toSelf.status, 400);
+    const empty = await api
+      .post('/api/direct-messages')
+      .set(as('beneficiary'))
+      .send({ recipient_id: donorId, body: '  ' });
+    assert.equal(empty.status, 400);
+    // L'administration garde son propre mini chat.
+    const fromAdmin = await api
+      .post('/api/direct-messages')
+      .set(as('admin'))
+      .send({ recipient_id: donorId, body: 'Bonjour' });
+    assert.equal(fromAdmin.status, 403);
   });
 });
 

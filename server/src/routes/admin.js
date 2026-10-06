@@ -37,7 +37,6 @@ export async function loadStats() {
     SELECT
       (SELECT COUNT(*) FROM offers WHERE status = 'pending') AS offers_pending,
       (SELECT COUNT(*) FROM offers WHERE status = 'published') AS offers_published,
-      (SELECT COUNT(*) FROM associations WHERE status = 'pending') AS associations_pending,
       (SELECT COUNT(*) FROM users WHERE status = 'suspended') AS users_suspended,
       (SELECT COUNT(*) FROM users WHERE role <> 'admin') AS users_total,
       (SELECT COUNT(*) FROM reservations WHERE status = 'picked_up') AS pickups_total,
@@ -471,50 +470,6 @@ adminRouter.delete('/actors/:id', async (req, res) => {
   firestoreMirror.deleted('actors', [actorId]);
   if (result.affectedRows === 0) throw notFound('Acteur');
   res.status(204).end();
-});
-
-// ---------- Validation des associations ----------
-
-const associationFilters = pagination.extend({
-  status: z.enum(['pending', 'approved', 'rejected']).default('pending'),
-});
-
-adminRouter.get('/associations', async (req, res) => {
-  const filters = associationFilters.parse(req.query);
-  const rows = await query(
-    `SELECT a.*, u.name AS user_name, u.email, u.phone
-     FROM associations a JOIN users u ON u.id = a.user_id
-     WHERE a.status = ? ORDER BY a.created_at ASC LIMIT ? OFFSET ?`,
-    [filters.status, filters.limit, filters.offset],
-  );
-  res.json(rows);
-});
-
-adminRouter.patch('/associations/:id/review', async (req, res) => {
-  const { id: associationId } = idParam.parse(req.params);
-  const { decision, reason: motive } = decisionSchema.parse(req.body);
-
-  const [association] = await query('SELECT * FROM associations WHERE id = ?', [
-    associationId,
-  ]);
-  if (!association) throw notFound('Association');
-
-  await query(
-    `UPDATE associations SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = NOW()
-     WHERE id = ?`,
-    [decision === 'approve' ? 'approved' : 'rejected', motive ?? null, req.user.id, associationId],
-  );
-  await notify(pool, association.user_id, {
-    type: 'association_review',
-    title: decision === 'approve' ? 'Association validée' : 'Association refusée',
-    body:
-      decision === 'approve'
-        ? `« ${association.name} » est validée : vous pouvez réserver des offres.`
-        : `« ${association.name} » n’a pas été validée : ${motive}`,
-  });
-
-  const [updated] = await query('SELECT * FROM associations WHERE id = ?', [associationId]);
-  res.json(updated);
 });
 
 // ---------- Catégories ----------

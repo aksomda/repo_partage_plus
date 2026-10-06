@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/offline/offline_screen.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
@@ -11,7 +12,6 @@ import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_sc
 import 'package:repo_partage_plus/features/admin/presentation/admin_impact_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_manage_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_reservations_screen.dart';
-import 'package:repo_partage_plus/features/admin/presentation/association_validation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/categories_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/factors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/offer_moderation_screen.dart';
@@ -22,12 +22,14 @@ import 'package:repo_partage_plus/features/auth/presentation/profile_screen.dart
 import 'package:repo_partage_plus/features/auth/presentation/register_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/splash_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/verify_email_screen.dart';
+import 'package:repo_partage_plus/features/discovery/presentation/filters_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/home_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/location_picker_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
 import 'package:repo_partage_plus/features/impact/presentation/impact_screen.dart';
 import 'package:repo_partage_plus/features/notifications/presentation/conversation_screen.dart';
+import 'package:repo_partage_plus/features/notifications/presentation/messages_screen.dart';
 import 'package:repo_partage_plus/features/notifications/presentation/notifications_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/create_offer_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/my_offers_screen.dart';
@@ -111,6 +113,14 @@ GoRouter createRouter({
         builder: (context, state) => const SearchScreen(),
       ),
       GoRoute(
+        path: AppRoutes.filters,
+        builder: (context, state) => const FiltersScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.offline,
+        builder: (context, state) => const OfflineScreen(),
+      ),
+      GoRoute(
         path: AppRoutes.pickLocation,
         builder: (context, state) => const LocationPickerScreen(),
       ),
@@ -164,6 +174,21 @@ GoRouter createRouter({
         builder: (context, state) => const NotificationsScreen(),
       ),
       GoRoute(
+        path: AppRoutes.messages,
+        builder: (context, state) => const MessagesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.teamMessages,
+        builder: (context, state) => const TeamMessagesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.directConversationPattern,
+        builder: (context, state) => DirectConversationScreen(
+          peerId: int.parse(state.pathParameters['peerId']!),
+          offerId: int.tryParse(state.uri.queryParameters['offer'] ?? ''),
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.conversationPattern,
         builder: (context, state) => ConversationScreen(
           userId: int.parse(state.pathParameters['userId']!),
@@ -190,10 +215,6 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.adminAccounts,
         builder: (context, state) => const AccountModerationScreen(),
-      ),
-      GoRoute(
-        path: AppRoutes.adminAssociations,
-        builder: (context, state) => const AssociationValidationScreen(),
       ),
       GoRoute(
         path: AppRoutes.adminCategories,

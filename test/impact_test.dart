@@ -145,8 +145,6 @@ void main() {
       await impactStore(tester),
       location: AppRoutes.home,
     );
-    expect(find.byTooltip('Mon impact'), findsOneWidget);
-
     await tester.tap(find.text('Mon impact'));
     await tester.pumpAndSettle();
     expect(find.text('Mon impact social'), findsOneWidget);

@@ -21,7 +21,9 @@ abstract final class AppRoutes {
   static const home = '/home';
   static const nearbyMap = '/discovery/map';
   static const search = '/discovery/search';
+  static const filters = '/discovery/filters';
   static const pickLocation = '/discovery/location';
+  static const offline = '/offline';
 
   // Offres
   static const myOffers = '/offers/mine';
@@ -44,6 +46,16 @@ abstract final class AppRoutes {
 
   // Notifications, impact, recommandations
   static const notifications = '/notifications';
+  static const messages = '/notifications/messages';
+  static const teamMessages = '/notifications/messages/team';
+  static const directConversationPattern =
+      '/notifications/messages/user/:peerId';
+
+  /// Échange avec un autre utilisateur ; [offerId] : offre dont on parle.
+  static String directConversation(int peerId, {int? offerId}) => Uri(
+    path: '/notifications/messages/user/$peerId',
+    queryParameters: offerId == null ? null : {'offer': '$offerId'},
+  ).toString();
   static const conversationPattern = '/notifications/conversation/:userId';
   static String conversation(int userId) =>
       '/notifications/conversation/$userId';
@@ -54,7 +66,6 @@ abstract final class AppRoutes {
   static const adminDashboard = '/admin';
   static const adminOffers = '/admin/offers';
   static const adminAccounts = '/admin/accounts';
-  static const adminAssociations = '/admin/associations';
   static const adminCategories = '/admin/categories';
   static const adminFactors = '/admin/factors';
   static const adminActors = '/admin/actors';
@@ -118,7 +129,9 @@ final List<RouteMenuEntry> allRouteEntries = [
   // Accueil
   const RouteMenuEntry('Démarrage', AppRoutes.splash, MenuGroup.home),
   const RouteMenuEntry('Accueil', AppRoutes.home, MenuGroup.home),
-  const RouteMenuEntry('Recherche', AppRoutes.search, MenuGroup.home),
+  const RouteMenuEntry('Offres disponibles', AppRoutes.search, MenuGroup.home),
+  const RouteMenuEntry('Filtres', AppRoutes.filters, MenuGroup.home),
+  const RouteMenuEntry('Mode hors ligne', AppRoutes.offline, MenuGroup.home),
   const RouteMenuEntry(
     'Point de départ',
     AppRoutes.pickLocation,
@@ -175,6 +188,12 @@ final List<RouteMenuEntry> allRouteEntries = [
     AppRoutes.notifications,
     MenuGroup.notifications,
   ),
+  const RouteMenuEntry('Messages', AppRoutes.messages, MenuGroup.notifications),
+  const RouteMenuEntry(
+    'Équipe Partage+',
+    AppRoutes.teamMessages,
+    MenuGroup.notifications,
+  ),
   // Impacts par donateur
   const RouteMenuEntry('Mon impact', AppRoutes.impact, MenuGroup.impacts),
   const RouteMenuEntry(
@@ -211,11 +230,6 @@ final List<RouteMenuEntry> allRouteEntries = [
   const RouteMenuEntry(
     'Gestion des utilisateurs',
     AppRoutes.adminAccounts,
-    MenuGroup.administration,
-  ),
-  const RouteMenuEntry(
-    'Validation des associations',
-    AppRoutes.adminAssociations,
     MenuGroup.administration,
   ),
   const RouteMenuEntry(

@@ -75,7 +75,7 @@ void main() {
   });
 
   testWidgets(
-    'utilisateur : notifications et messages en mini chat, envoi hors ligne',
+    'utilisateur : notifications par onglet, messages à part, envoi hors ligne',
     (tester) async {
       final store = await _store(tester, {
         'profile': {'id': 3, 'name': 'Awa Traoré', 'role': 'beneficiary'},
@@ -112,8 +112,27 @@ void main() {
 
       expect(find.text('Réservation confirmée'), findsOneWidget);
       expect(find.text('Votre panier vous attend'), findsOneWidget);
+      // Rangée dans l'onglet « Réservations » ; le message n'est pas listé.
+      expect(find.text('Réservations (1)'), findsOneWidget);
+      expect(find.text('Bonjour Awa'), findsNothing);
+      expect(find.text('1 nouveau message'), findsOneWidget);
+      // Écriture de la file : asynchrone, on la laisse se terminer.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      var actions = (await tester.runAsync(() => Outbox(store.db).all()))!;
+      // Notifications marquées lues, pas encore le message.
+      expect(actions.map((a) => a.kind), ['notification.read_all']);
+
+      await tester.tap(find.text('Messages').last);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'Messages'), findsOneWidget);
+      await tester.tap(find.text('Équipe Partage+'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'Équipe Partage+'), findsOneWidget);
       expect(find.text('Bonjour Awa'), findsOneWidget);
       expect(find.text('Administration'), findsOneWidget);
+      expect(find.text('Votre panier vous attend'), findsNothing);
       expect(find.byTooltip('Joindre une image'), findsOneWidget);
 
       await tester.enterText(find.byType(TextField), 'Merci !');
@@ -124,9 +143,9 @@ void main() {
       expect(find.text('Merci !'), findsOneWidget);
       expect(find.text('En attente d’envoi'), findsOneWidget);
 
-      final actions = (await tester.runAsync(() => Outbox(store.db).all()))!;
+      actions = (await tester.runAsync(() => Outbox(store.db).all()))!;
       final kinds = actions.map((a) => a.kind).toList();
-      // Ouverture : message de l'admin et notifications marqués lus.
+      // Ouvertures : notifications puis message de l'admin marqués lus.
       expect(kinds, containsAll(['message.read', 'notification.read_all']));
       final sent = actions.singleWhere((a) => a.kind == 'message.send');
       expect(sent.path, '/messages');
@@ -191,6 +210,82 @@ void main() {
     final read = actions.singleWhere((a) => a.kind == 'message.read');
     expect(read.body, {'user_id': 3});
   });
+
+  testWidgets(
+    'fiche détail : écrire au publieur, échange listé, notification à part',
+    (tester) async {
+      final store = await _store(tester, {
+        'profile': {'id': 3, 'name': 'Awa Traoré', 'role': 'beneficiary'},
+        'offers': [
+          {
+            ...publishedOffer(id: 7, title: 'Pains du soir'),
+            'donor_id': 2,
+            'donor_name': 'Boulangerie du Centre',
+          },
+        ],
+        'notifications': [
+          // Doublon d'un message : pas listé avec les notifications.
+          {
+            'id': 4,
+            'type': 'direct_message',
+            'title': 'Message de Restaurant Le Partage',
+            'body': 'Il reste 2 portions',
+            'data': {'peer_id': 5},
+            'created_at': _ago(5),
+          },
+        ],
+        'direct_messages': [
+          {
+            'id': 11,
+            'sender_id': 5,
+            'recipient_id': 3,
+            'offer_id': 9,
+            'offer_title': 'Riz sauce arachide',
+            'body': 'Il reste 2 portions',
+            'photos_count': 0,
+            'sender_name': 'Restaurant Le Partage',
+            'sender_actor': 'Restaurateur',
+            'recipient_name': 'Awa Traoré',
+            'created_at': _ago(5),
+          },
+        ],
+      });
+      await _pump(tester, store, AppRoutes.offer('7'));
+
+      await tester.tap(find.byTooltip('Écrire au publieur'));
+      await tester.pumpAndSettle();
+      expect(find.text('Boulangerie du Centre'), findsOneWidget);
+      expect(find.text('À propos de « Pains du soir »'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), 'Reste-t-il du pain ?');
+      await tester.pump();
+      await tester.tap(find.byTooltip('Envoyer'));
+      await tester.pumpAndSettle();
+      expect(find.text('Reste-t-il du pain ?'), findsOneWidget);
+
+      final actions = (await tester.runAsync(() => Outbox(store.db).all()))!;
+      final sent = actions.singleWhere((a) => a.kind == 'direct_message.send');
+      expect(sent.path, '/direct-messages');
+      expect(sent.body, {
+        'recipient_id': 2,
+        'offer_id': 7,
+        'body': 'Reste-t-il du pain ?',
+        'photos': <String>[],
+      });
+
+      // Liste des messages : l'échange reçu, non lu, avec son offre.
+      await _pump(tester, store, AppRoutes.messages);
+      expect(find.text('Restaurant Le Partage'), findsOneWidget);
+      expect(find.text('Restaurateur'), findsOneWidget);
+      expect(find.text('À propos de « Riz sauce arachide »'), findsOneWidget);
+      expect(find.text('Il reste 2 portions'), findsOneWidget);
+
+      // Notifications : le message n'y est pas en double.
+      await _pump(tester, store, AppRoutes.notifications);
+      expect(find.text('Message de Restaurant Le Partage'), findsNothing);
+      expect(find.text('1 nouveau message'), findsOneWidget);
+    },
+  );
 
   testWidgets('sans compte : le mini chat redirige vers la connexion', (
     tester,
