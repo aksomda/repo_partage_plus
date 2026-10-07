@@ -43,6 +43,28 @@ les tâches planifiées ne tournent pas pendant son sommeil. Pour y remédier, c
 
 Cela garde l'API éveillée et envoie les rappels de retrait / alertes DLC à l'heure.
 
+### Service de test (branche `dev`)
+
+Le Blueprint ne déploie que `main`. Pour tester `dev`, créer un service à la main :
+**New** → **Web Service** → ce dépôt, puis :
+
+| Réglage | Valeur |
+|---|---|
+| Branch | `dev` |
+| Root Directory | `server` (sinon : `Couldn't find a package.json file`) |
+| Runtime | Node (version 22, lue dans `server/.node-version`) |
+| Build Command | `npm ci --omit=dev` |
+| Start Command | `npm run start:prod` |
+| Health Check Path | `/health` |
+
+Onglet **Environment** : reprendre toutes les variables de [`render.yaml`](../render.yaml).
+`JWT_SECRET` et `JOBS_TOKEN` n'y sont pas générées automatiquement : bouton **Generate**
+de Render, ou `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`.
+Sans `JWT_SECRET` d'au moins 32 caractères, l'API refuse de démarrer en production.
+
+> `start:prod` applique le schéma sur la base de `DATABASE_URL` : utiliser de préférence
+> une base de test distincte de la base en ligne.
+
 ## 3. Variable GitHub pour les builds
 
 GitHub → **Settings → Secrets and variables → Actions → Variables** → **New repository variable** :
