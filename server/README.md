@@ -42,10 +42,25 @@ désactivation) sont notés (`users.firebase_sync_at`) puis recopiés dans
 Firebase en arrière-plan, au démarrage et à chaque passage des tâches
 planifiées, jusqu'à réussite (compte de service requis).
 
+**Codes d'activation et de mot de passe oublié** : l'e-mail reste le canal
+principal (s'il ne part pas, la demande échoue). En complément, sans jamais
+bloquer la demande :
+
+- **SMS** au numéro du compte, par un téléphone Android servant de passerelle
+  (application « SMS Gateway for Android », https://sms-gate.app). Activé par
+  `SMS_PROVIDER=android-gateway` dans `.env` (vide : désactivé), plafonné à
+  `SMS_DAILY_LIMIT` SMS par jour (10 par défaut, table `sms_daily`). Un envoi
+  raté ne compte pas. Un service payant s'ajoute dans `src/services/sms.js`
+  (`PROVIDERS`) puis se choisit par `SMS_PROVIDER`.
+- **Notification push** : pour l'activation, au téléphone qui s'est inscrit
+  (`device_token` envoyé avec l'inscription) ; pour le mot de passe oublié,
+  aux appareils déjà connectés au compte, jamais à celui qui fait la demande.
+  Application ouverte, le code remplit tout seul le champ de saisie.
+
 | Route | Rôle |
 |---|---|
 | `GET /api/actors` | Acteurs proposés à l'inscription |
-| `POST /api/auth/register` | Profil + jeton Firebase → compte `pending`, code envoyé |
+| `POST /api/auth/register` | Profil + jeton Firebase (+ `device_token` facultatif) → compte `pending`, code envoyé |
 | `POST /api/auth/verify-email` | E-mail + code → compte actif, renvoie la session |
 | `POST /api/auth/resend-code` | Nouveau code (1 par minute) |
 | `POST /api/auth/firebase` | Jeton Firebase → session (compte actif uniquement) |
@@ -138,6 +153,9 @@ l'en-tête `Idempotent-Replayed: true`. Voir [docs/HORS_LIGNE.md](../docs/HORS_L
 | GET | `/auth/me` | connecté | Profil (et association le cas échéant) |
 | PATCH | `/users/me` | connecté | Modifier nom, téléphone, position |
 | PUT | `/users/me/password` | connecté | Changer de mot de passe |
+| PUT | `/users/me/photo` | connecté | Ajouter ou remplacer la photo de profil `{ photo: "data:image/jpeg;base64,…" }` (3 Mo max, JPEG, PNG ou WebP) → profil avec `photo_path` |
+| DELETE | `/users/me/photo` | connecté | Retirer la photo de profil (retour aux initiales) |
+| GET | `/users/:id/photo` | public | Photo de profil (chemin donné par `photo_path`) |
 
 ### Offres
 
@@ -499,6 +517,9 @@ See [`docs/HORS_LIGNE.md`](../docs/HORS_LIGNE.md) for more information about off
 | GET    | `/auth/me`           | Authenticated | Returns the authenticated user's profile and association information, if applicable                                                              |
 | PATCH  | `/users/me`          | Authenticated | Updates the user's name, phone number, and location                                                                                              |
 | PUT    | `/users/me/password` | Authenticated | Changes the user's password                                                                                                                      |
+| PUT    | `/users/me/photo`    | Authenticated | Adds or replaces the profile photo `{ photo: "data:image/jpeg;base64,…" }` (3 MB max, JPEG, PNG or WebP); returns the profile with `photo_path` |
+| DELETE | `/users/me/photo`    | Authenticated | Removes the profile photo (back to initials) |
+| GET    | `/users/:id/photo`   | Public        | Profile photo (path given by `photo_path`) |
 
 ## Offers
 

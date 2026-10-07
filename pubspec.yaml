@@ -67,6 +67,7 @@ dependencies:
   # QR code du retrait (montré par le bénéficiaire, scanné par le donateur)
   qr_flutter: ^4.1.0
   connectivity_plus: ^7.3.1
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:

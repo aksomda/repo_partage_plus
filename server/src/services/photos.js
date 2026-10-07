@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { query } from '../db/pool.js';
 import { HttpError } from '../http/errors.js';
 
 /** Taille maximale d'une photo, une fois décodée (l'application la réduit avant envoi). */
@@ -36,6 +37,22 @@ export function decode(dataUrl) {
     throw new HttpError(400, 'Photo invalide : JPEG, PNG ou WebP', { field: 'photo' });
   }
   return { mime, data };
+}
+
+/** Enregistre, remplace ou retire la photo de profil du compte. */
+export async function saveUserPhoto(userId, photo) {
+  if (photo === null) {
+    await query('DELETE FROM user_photos WHERE user_id = ?', [userId]);
+    await query('UPDATE users SET photo_updated_at = NULL WHERE id = ?', [userId]);
+    return;
+  }
+  const { mime, data } = decode(photo);
+  await query(
+    `INSERT INTO user_photos (user_id, mime, data) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE mime = VALUES(mime), data = VALUES(data)`,
+    [userId, mime, data],
+  );
+  await query('UPDATE users SET photo_updated_at = NOW() WHERE id = ?', [userId]);
 }
 
 /** Enregistre, remplace ou retire la photo de l'offre (dans la transaction). */

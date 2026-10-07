@@ -5,10 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/offline/sync_service.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
-import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
-import 'package:repo_partage_plus/features/auth/presentation/widgets/logout_button.dart';
 
 /// Largeur à partir de laquelle on affiche la barre latérale et les tableaux.
 const adminWideLayout = 900.0;
@@ -62,6 +60,7 @@ class AdminShell extends StatelessWidget {
   }
 }
 
+/// Barre latérale verte des grands écrans : même panneau que le tiroir.
 class AdminSideNav extends StatelessWidget {
   const AdminSideNav({super.key, required this.current});
 
@@ -71,95 +70,8 @@ class AdminSideNav extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 220,
-      color: AppColors.primary,
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: ListView(
-              children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(8, 0, 8, 20),
-                  child: BrandLogo(size: 24, onDark: true, showTagline: false),
-                ),
-                for (final item in adminMenuItems)
-                  _NavItem(
-                    icon: item.icon,
-                    label: item.title,
-                    description: item.description,
-                    selected: item.location == current,
-                    onTap: () => context.go(item.location),
-                  ),
-              ],
-            ),
-          ),
-          const Divider(color: Colors.white24),
-          // Material : effet au toucher visible sur le fond vert.
-          const Material(
-            type: MaterialType.transparency,
-            child: AccountMenuFooter(onDark: true),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
-  const _NavItem({
-    required this.icon,
-    required this.label,
-    required this.description,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final String description;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: description,
-      waitDuration: menuTooltipDelay,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Material(
-          color: selected
-              ? Colors.white.withValues(alpha: 0.16)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: selected ? null : onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(icon, size: 20, color: Colors.white),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      label,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
+      color: MenuColors.admin,
+      child: MenuPanel(sections: adminMenu, current: current),
     );
   }
 }

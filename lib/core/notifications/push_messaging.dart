@@ -8,9 +8,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:repo_partage_plus/core/firebase/firebase_init.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
+import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/router/app_router.dart';
 import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
+
+/// Code reçu par push (activation du compte ou mot de passe oublié).
+typedef PushedCode = ({String purpose, String code});
 
 /// Notifications push (Firebase Cloud Messaging), Android et iOS : le
 /// jeton de l'appareil est enregistré sur le serveur tant qu'un compte est
@@ -23,6 +27,10 @@ class PushMessaging {
   final Ref _ref;
   String? _registeredToken;
   final _subscriptions = <StreamSubscription<Object?>>[];
+  final _codes = StreamController<PushedCode>.broadcast();
+
+  /// Codes reçus par push : les écrans de saisie du code se remplissent seuls.
+  Stream<PushedCode> get codes => _codes.stream;
 
   static bool get supported =>
       !kIsWeb &&
@@ -47,9 +55,10 @@ class PushMessaging {
     try {
       _subscriptions
         ..add(
-          FirebaseMessaging.onMessage.listen(
-            (_) => _ref.read(syncControllerProvider.notifier).syncNow(),
-          ),
+          FirebaseMessaging.onMessage.listen((message) {
+            if (_takeCode(message, showNotification: true)) return;
+            _ref.read(syncControllerProvider.notifier).syncNow();
+          }),
         )
         ..add(FirebaseMessaging.onMessageOpenedApp.listen(_open))
         ..add(messaging.onTokenRefresh.listen(_send));
@@ -60,7 +69,30 @@ class PushMessaging {
     }
   }
 
+  /// Code d'activation ou de mot de passe oublié : transmis à l'écran de
+  /// saisie. Application ouverte, Android n'affiche pas la notification :
+  /// elle est alors montrée par l'application.
+  bool _takeCode(RemoteMessage message, {bool showNotification = false}) {
+    final code = message.data['code'];
+    if (message.data['type'] != 'otp_code' || code is! String) return false;
+    _codes.add((purpose: '${message.data['purpose']}', code: code));
+    final notification = message.notification;
+    if (showNotification && notification != null) {
+      unawaited(
+        _ref
+            .read(localNotificationsProvider)
+            .show(
+              900000 + int.parse(code) % 1000,
+              notification.title ?? 'Code Partage+',
+              notification.body ?? '',
+            ),
+      );
+    }
+    return true;
+  }
+
   void _open(RemoteMessage message) {
+    if (_takeCode(message)) return;
     final link = notificationLink({
       'type': message.data['type'],
       'data': message.data.map(
@@ -69,6 +101,30 @@ class PushMessaging {
     });
     _ref.read(syncControllerProvider.notifier).syncNow();
     if (link != null) _ref.read(routerProvider).push(link);
+  }
+
+  /// Jeton de l'appareil, envoyé avec l'inscription (le compte n'est pas
+  /// encore connecté) pour recevoir aussi le code d'activation par push.
+  /// null si le push n'est pas disponible ; jamais bloquant.
+  Future<Map<String, String>?> signupDevice() async {
+    final messaging = await _messaging();
+    if (messaging == null) return null;
+    try {
+      await messaging.requestPermission();
+      final token = await messaging.getToken().timeout(
+        const Duration(seconds: 5),
+      );
+      if (token == null) return null;
+      return {
+        'device_token': token,
+        'device_platform': defaultTargetPlatform == TargetPlatform.iOS
+            ? 'ios'
+            : 'android',
+      };
+    } catch (error) {
+      debugPrint('Jeton push indisponible : $error');
+      return null;
+    }
   }
 
   /// Compte connecté : autorisation demandée, jeton envoyé au serveur.
@@ -120,6 +176,7 @@ class PushMessaging {
   }
 
   void dispose() {
+    _codes.close();
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }

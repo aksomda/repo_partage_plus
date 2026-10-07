@@ -124,10 +124,18 @@ function withoutSecrets(table, rows) {
 async function copyChanged(since) {
   const [{ now }] = await query('SELECT NOW() AS now');
   const counts = {};
-  for (const table of Object.keys(MIRRORED_TABLES)) {
-    const rows = since
-      ? await query(`SELECT * FROM ${table} WHERE updated_at >= ?`, [since])
-      : await query(`SELECT * FROM ${table}`);
+  // Lectures en parallèle (un aller-retour au lieu d'un par table), écritures
+  // Firestore ensuite, une table après l'autre.
+  const tables = Object.keys(MIRRORED_TABLES);
+  const changed = await Promise.all(
+    tables.map((table) =>
+      since
+        ? query(`SELECT * FROM ${table} WHERE updated_at >= ?`, [since])
+        : query(`SELECT * FROM ${table}`),
+    ),
+  );
+  for (const [index, table] of tables.entries()) {
+    const rows = changed[index];
     if (rows.length > 0) await store.write(table, withoutSecrets(table, rows));
     counts[table] = rows.length;
   }

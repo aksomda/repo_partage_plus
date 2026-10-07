@@ -48,14 +48,26 @@ class LocalStore {
   /// Enregistre chaque clé de la réponse GET /api/sync séparément.
   /// Une clé à null (ex. `admin` pour un non-admin) efface la copie locale :
   /// sembast refuse d'enregistrer null.
+  ///
+  /// Seules les clés modifiées sont réécrites : les écrans qui les observent
+  /// ne se reconstruisent pas pour rien, et le fichier de la base (relu en
+  /// entier au démarrage) ne grossit pas à chaque synchronisation.
   Future<void> saveSnapshot(Map<String, dynamic> snapshot) {
     return db.transaction((txn) async {
       for (final entry in snapshot.entries) {
+        final record = _snapshot.record(entry.key);
+        final current = await record.get(txn);
+        if (current == null && entry.value == null) continue;
+        if (current != null &&
+            entry.value != null &&
+            jsonEncode(current) == jsonEncode(entry.value)) {
+          continue;
+        }
         // Correction erreur lors de la publication d'une offre
         if (entry.value != null) {
-          await _snapshot.record(entry.key).put(txn, entry.value);
+          await record.put(txn, entry.value);
         } else {
-          await _snapshot.record(entry.key).delete(txn);
+          await record.delete(txn);
         }
       }
       await _session

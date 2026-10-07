@@ -9,6 +9,8 @@ import 'package:repo_partage_plus/core/firebase/firebase_init.dart';
 import 'package:repo_partage_plus/core/maps/offline_tiles.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
+import 'package:repo_partage_plus/core/router/app_router.dart';
+import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/database_opener.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/widgets/friendly_error.dart';
@@ -27,7 +29,10 @@ Future<void> main() async {
     }),
   ).wait;
   final store = LocalStore(database);
-  final token = await store.readToken();
+  final (token, profile) = await (
+    store.readToken(),
+    store.readSnapshot('profile'),
+  ).wait;
 
   // Firebase (connexion, IA) et notifications (demande d'autorisation)
   // s'initialisent pendant que le premier écran s'affiche.
@@ -44,6 +49,9 @@ Future<void> main() async {
       overrides: [
         localStoreProvider.overrideWithValue(store),
         initialTokenProvider.overrideWithValue(token),
+        // Session existante : l'accueil du compte s'ouvre directement.
+        if (token != null)
+          initialLocationProvider.overrideWithValue(AppRoutes.homeFor(profile)),
         localNotificationsProvider.overrideWithValue(notifications),
       ],
       child: const RepasPartageApp(),

@@ -1,6 +1,10 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
@@ -15,6 +19,8 @@ import 'package:repo_partage_plus/features/auth/data/profile_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/logout_button.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
+import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart'
+    show imageMimeType, maxChatPhotoBytes;
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/recommendations/data/preferences.dart';
 
@@ -354,7 +360,7 @@ class _Header extends StatelessWidget {
 
     return Row(
       children: [
-        ProfileAvatar(name: name, size: 72),
+        _EditableAvatar(name: name, photoUrl: profilePhotoUrl(profile)),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
@@ -394,6 +400,169 @@ class _Header extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Ce que l'utilisateur choisit dans le menu de la photo de profil.
+enum _PhotoChoice { camera, gallery, remove }
+
+/// Photo de profil (initiales sans photo) : un appui ouvre le menu pour
+/// l'ajouter, la changer ou la retirer. Envoi immédiat (réseau requis).
+class _EditableAvatar extends ConsumerStatefulWidget {
+  const _EditableAvatar({required this.name, required this.photoUrl});
+
+  final String name;
+  final String? photoUrl;
+
+  @override
+  ConsumerState<_EditableAvatar> createState() => _EditableAvatarState();
+}
+
+class _EditableAvatarState extends ConsumerState<_EditableAvatar> {
+  var _saving = false;
+
+  Future<void> _edit() async {
+    final mobile =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    final hasPhoto = widget.photoUrl != null;
+    final choice = await showModalBottomSheet<_PhotoChoice>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (mobile)
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Prendre une photo'),
+                onTap: () => Navigator.pop(context, _PhotoChoice.camera),
+              ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: Text(hasPhoto ? 'Changer de photo' : 'Choisir une photo'),
+              onTap: () => Navigator.pop(context, _PhotoChoice.gallery),
+            ),
+            if (hasPhoto)
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.danger,
+                ),
+                title: const Text(
+                  'Retirer la photo',
+                  style: TextStyle(color: AppColors.danger),
+                ),
+                onTap: () => Navigator.pop(context, _PhotoChoice.remove),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    if (choice == _PhotoChoice.remove) return _save(null, 'Photo retirée');
+
+    final XFile? file;
+    try {
+      // Photo carrée et légère : affichée en petit partout.
+      file = await ImagePicker().pickImage(
+        source: choice == _PhotoChoice.camera
+            ? ImageSource.camera
+            : ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 80,
+        preferredCameraDevice: CameraDevice.front,
+      );
+    } catch (_) {
+      if (mounted) {
+        showMessage(context, 'Impossible d’ouvrir les photos', error: true);
+      }
+      return;
+    }
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+    final mime = imageMimeType(bytes);
+    if (mime == null) {
+      showMessage(
+        context,
+        'Format non pris en charge : JPEG, PNG ou WebP',
+        error: true,
+      );
+      return;
+    }
+    if (bytes.length > maxChatPhotoBytes) {
+      showMessage(context, 'Photo trop lourde (3 Mo maximum)', error: true);
+      return;
+    }
+    await _save(
+      'data:$mime;base64,${base64Encode(bytes)}',
+      'Photo de profil mise à jour',
+    );
+  }
+
+  Future<void> _save(String? dataUrl, String done) async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(profileRepositoryProvider).setPhoto(dataUrl);
+      if (mounted) showMessage(context, done);
+    } catch (error) {
+      if (mounted) showMessage(context, '$error', error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const size = 72.0;
+    return Tooltip(
+      message: widget.photoUrl == null
+          ? 'Ajouter une photo de profil'
+          : 'Modifier la photo de profil',
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: _saving ? null : _edit,
+        child: SizedBox.square(
+          dimension: size + 4,
+          child: Stack(
+            children: [
+              ProfileAvatar(
+                name: widget.name,
+                size: size,
+                photoUrl: widget.photoUrl,
+              ),
+              if (_saving)
+                const SizedBox.square(
+                  dimension: size,
+                  child: Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                ),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(5),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: const Icon(
+                    Icons.photo_camera,
+                    size: 14,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1029,25 +1198,25 @@ class _SecuritySectionState extends ConsumerState<_SecuritySection> {
               children: [
                 LabeledField(
                   label: 'Mot de passe actuel',
-                  child: TextFormField(
+                  child: PasswordField(
                     controller: _current,
-                    obscureText: true,
+                    hint: '',
                     validator: requiredField('Mot de passe actuel requis'),
                   ),
                 ),
                 LabeledField(
                   label: 'Nouveau mot de passe',
-                  child: TextFormField(
+                  child: PasswordField(
                     controller: _next,
-                    obscureText: true,
+                    hint: '',
                     validator: validatePassword,
                   ),
                 ),
                 LabeledField(
                   label: 'Confirmer',
-                  child: TextFormField(
+                  child: PasswordField(
                     controller: _confirm,
-                    obscureText: true,
+                    hint: '',
                     validator: (value) => value != _next.text
                         ? 'Les mots de passe ne correspondent pas'
                         : null,

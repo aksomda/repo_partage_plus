@@ -5,8 +5,6 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 
 /// Écran temporaire affiché tant qu'une feature n'est pas implémentée.
-///
-/// Le tiroir liste tous les écrans pour pouvoir naviguer pendant le dev.
 class PlaceholderScreen extends StatelessWidget {
   const PlaceholderScreen({super.key, required this.title, this.details});
 

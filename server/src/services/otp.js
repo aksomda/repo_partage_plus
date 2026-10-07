@@ -3,6 +3,8 @@ import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 import { HttpError } from '../http/errors.js';
 import { sendMail } from './mailer.js';
+import { sendPush } from './push.js';
+import { sendSms } from './sms.js';
 
 /** Le code n'est jamais stocké en clair : seul son HMAC l'est. */
 function hashCode(userId, code) {
@@ -13,11 +15,13 @@ function hashCode(userId, code) {
 const PURPOSES = {
   activation: {
     subject: 'votre code d’activation',
+    title: 'Code d’activation',
     label: 'Votre code d’activation Partage+ est',
     ignore: 'Si vous n’êtes pas à l’origine de cette inscription, ignorez ce message.',
   },
   password_reset: {
     subject: 'réinitialisation de votre mot de passe',
+    title: 'Mot de passe oublié',
     label: 'Votre code pour choisir un nouveau mot de passe Partage+ est',
     ignore: 'Si vous n’avez rien demandé, ignorez ce message : votre mot de passe reste inchangé.',
   },
@@ -30,7 +34,9 @@ export const consumeActivationCode = (conn, userId, code) =>
 
 /**
  * Crée un nouveau code (les précédents du même usage deviennent
- * inutilisables) et l'envoie par e-mail.
+ * inutilisables) et l'envoie par e-mail (canal principal : un échec annule
+ * tout). En complément, SMS et push partent une fois la transaction
+ * validée (voir sendCodeExtras).
  */
 export async function issueCode(conn, user, purpose) {
   const wording = PURPOSES[purpose];
@@ -42,6 +48,17 @@ export async function issueCode(conn, user, purpose) {
   if (last && last.age < config.otp.resendDelaySeconds) {
     const wait = config.otp.resendDelaySeconds - last.age;
     throw new HttpError(429, `Patientez ${wait} s avant de demander un nouveau code`);
+  }
+  // Plafond du jour : contre l'envoi massif d'e-mails et de SMS à un compte.
+  const [[{ issued }]] = await conn.query(
+    `SELECT COUNT(*) AS issued FROM email_otps
+     WHERE user_id = ? AND purpose = ? AND created_at > NOW() - INTERVAL 1 DAY`,
+    [user.id, purpose],
+  );
+  if (issued >= config.otp.maxCodesPerDay) {
+    throw new HttpError(429, 'Trop de codes demandés aujourd’hui : réessayez demain', {
+      code: 'otp_daily_limit',
+    });
   }
 
   const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
@@ -70,6 +87,53 @@ export async function issueCode(conn, user, purpose) {
       `<p>Il est valable ${config.otp.ttlMinutes} minutes.</p>` +
       `<p style="color:#6B7A70">${wording.ignore}</p>`,
   });
+  conn.afterCommit.push(() => sendInBackground(sendCodeExtras(user, purpose, code)));
+}
+
+const background = new Set();
+
+/** Envoi en arrière-plan : une passerelle SMS lente ne retarde pas la réponse. */
+function sendInBackground(promise) {
+  const tracked = promise.catch((error) => console.error('Code non envoyé :', error.message));
+  background.add(tracked);
+  tracked.finally(() => background.delete(tracked));
+}
+
+/** Pour les tests : attend la fin des envois en arrière-plan. */
+export async function flushCodeExtras() {
+  await Promise.all(background);
+}
+
+/**
+ * Compléments de l'e-mail, sans jamais faire échouer la demande :
+ * - SMS au numéro du compte (si SMS_PROVIDER est renseigné, dans le plafond
+ *   du jour) ;
+ * - push aux appareils du compte : ceux déjà connectés pour le mot de passe
+ *   oublié, celui de l'inscription pour l'activation. Jamais à l'appareil qui
+ *   fait la demande : sinon n'importe qui recevrait le code d'un autre compte.
+ */
+async function sendCodeExtras(user, purpose, code) {
+  const wording = PURPOSES[purpose];
+  const minutes = config.otp.ttlMinutes;
+  await Promise.all([
+    user.phone
+      ? sendSms(
+          user.phone,
+          // Sans apostrophe typographique : un seul SMS (alphabet GSM, 160 caractères).
+          `Partage+ - ${wording.title.replace('’', "'")} : ${code}. Valable ${minutes} min. Ne le communiquez à personne.`,
+        )
+      : null,
+    sendPush(
+      user.id,
+      {
+        type: 'otp_code',
+        title: `${wording.title} : ${code}`,
+        body: `Valable ${minutes} minutes. Ne le communiquez à personne.`,
+        data: { purpose, code },
+      },
+      { always: true },
+    ),
+  ]);
 }
 
 /** Vérifie le code ; lève une erreur explicite sinon. */
@@ -84,6 +148,18 @@ export async function consumeCode(conn, userId, code, purpose) {
   }
   if (otp.attempts >= config.otp.maxAttempts) {
     throw new HttpError(429, 'Trop d’essais : demandez un nouveau code', { code: 'otp_locked' });
+  }
+  // Essais ratés sur 24 h, tous codes confondus : demander sans cesse un
+  // nouveau code ne permet pas d'essayer indéfiniment.
+  const [[{ failures }]] = await conn.query(
+    `SELECT COALESCE(SUM(attempts), 0) AS failures FROM email_otps
+     WHERE user_id = ? AND purpose = ? AND created_at > NOW() - INTERVAL 1 DAY`,
+    [userId, purpose],
+  );
+  if (Number(failures) >= config.otp.maxFailuresPerDay) {
+    throw new HttpError(429, 'Trop d’essais aujourd’hui : réessayez demain', {
+      code: 'otp_daily_locked',
+    });
   }
 
   const expected = Buffer.from(otp.code_hash, 'hex');

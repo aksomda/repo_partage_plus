@@ -128,13 +128,15 @@ class AuthRepository {
   }
 
   Future<void> _register(Registration data) async {
+    // Téléphone qui s'inscrit : il reçoit aussi le code d'activation par push.
+    final device = await _ref.read(pushMessagingProvider).signupDevice() ?? {};
     final String idToken;
     final bool createdNow;
     try {
       (idToken, createdNow) = await _firebaseAccount(data.email, data.password);
     } on FirebaseAuthFailure catch (error) {
       if (error.code != 'not-configured' && !error.isUnavailable) rethrow;
-      await _registerLocally(data);
+      await _registerLocally(data, device);
       return;
     }
 
@@ -145,6 +147,7 @@ class AuthRepository {
         'id_token': idToken,
         'password': data.password,
         ..._profile(data),
+        ...device,
       });
     } on ApiException catch (error) {
       if (error.code != 'firebase_unavailable') {
@@ -153,7 +156,7 @@ class AuthRepository {
       }
       // Le serveur ne joint pas Firebase : compte enregistré dans MySQL,
       // rattaché au compte Firebase par le serveur une fois activé.
-      await _registerLocally(data);
+      await _registerLocally(data, device);
     } finally {
       await _firebase.signOut();
     }
@@ -175,10 +178,15 @@ class AuthRepository {
   /// Sans Firebase (Windows/Linux non configuré, ou Firebase injoignable) :
   /// compte local, mot de passe haché dans MySQL par l'API, qui le recopie
   /// dans Firebase en arrière-plan une fois le compte activé.
-  Future<void> _registerLocally(Registration data) => _post(
-    ApiEndpoints.register,
-    {'email': data.email, 'password': data.password, ..._profile(data)},
-  );
+  Future<void> _registerLocally(
+    Registration data,
+    Map<String, String> device,
+  ) => _post(ApiEndpoints.register, {
+    'email': data.email,
+    'password': data.password,
+    ..._profile(data),
+    ...device,
+  });
 
   Map<String, Object?> _profile(Registration data) => {
     'actor_id': data.actorId,

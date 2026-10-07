@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/notifications/push_messaging.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
@@ -37,12 +38,30 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   var _loading = false;
   var _resendIn = 0;
   Timer? _timer;
+  StreamSubscription<PushedCode>? _pushedCodes;
+
+  @override
+  void initState() {
+    super.initState();
+    // Code reçu par notification sur un appareil du compte : champ rempli.
+    _pushedCodes = ref
+        .read(pushMessagingProvider)
+        .codes
+        .where((pushed) => pushed.purpose == 'password_reset')
+        .listen((pushed) {
+          if (!mounted || !_codeSent) return;
+          _code.text = pushed.code;
+          showMessage(context, 'Code reçu par notification');
+          _passwordFocus.requestFocus();
+        });
+  }
 
   String get _emailValue => _email.text.trim().toLowerCase();
 
   @override
   void dispose() {
     _timer?.cancel();
+    _pushedCodes?.cancel();
     _passwordFocus.dispose();
     for (final controller in [_email, _code, _password, _confirm]) {
       controller.dispose();
@@ -121,7 +140,8 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           title: 'Réinitialiser le mot de passe',
           subtitle: _codeSent
               ? 'Saisissez le code à 6 chiffres reçu par e-mail (pensez aux '
-                    'spams), puis choisissez un nouveau mot de passe.'
+                    'spams), par SMS ou par notification, puis choisissez un '
+                    'nouveau mot de passe.'
               : 'Indiquez l’adresse e-mail de votre compte : vous recevrez '
                     'un code pour choisir un nouveau mot de passe.',
         ),
@@ -149,7 +169,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
               ),
               if (_codeSent) ...[
                 LabeledField(
-                  label: 'Code reçu par e-mail',
+                  label: 'Code reçu',
                   child: TextFormField(
                     controller: _code,
                     autofocus: true,

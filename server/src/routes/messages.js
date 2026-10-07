@@ -96,11 +96,10 @@ messagesRouter.post('/', async (req, res) => {
        VALUES (?, ?, ?, ?, ?)`,
       [conversationUserId, req.user.id, fromAdmin, data.body || null, photos.length],
     );
-    for (const [position, photo] of photos.entries()) {
-      await conn.query(
-        'INSERT INTO message_photos (message_id, position, mime, data) VALUES (?, ?, ?, ?)',
-        [result.insertId, position, photo.mime, photo.data],
-      );
+    if (photos.length > 0) {
+      await conn.query('INSERT INTO message_photos (message_id, position, mime, data) VALUES ?', [
+        photos.map((photo, position) => [result.insertId, position, photo.mime, photo.data]),
+      ]);
     }
 
     const preview = data.body

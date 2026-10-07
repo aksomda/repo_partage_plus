@@ -155,11 +155,10 @@ directMessagesRouter.post('/', async (req, res) => {
        VALUES (?, ?, ?, ?, ?)`,
       [req.user.id, data.recipient_id, data.offer_id ?? null, data.body || null, photos.length],
     );
-    for (const [position, photo] of photos.entries()) {
-      await conn.query(
-        'INSERT INTO direct_message_photos (message_id, position, mime, data) VALUES (?, ?, ?, ?)',
-        [result.insertId, position, photo.mime, photo.data],
-      );
+    if (photos.length > 0) {
+      await conn.query('INSERT INTO direct_message_photos (message_id, position, mime, data) VALUES ?', [
+        photos.map((photo, position) => [result.insertId, position, photo.mime, photo.data]),
+      ]);
     }
     await notify(conn, data.recipient_id, {
       type: 'direct_message',

@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS users (
   -- du changement) ; firebase_sync_password : le mot de passe aussi.
   firebase_sync_at DATETIME(3) NULL,
   firebase_sync_password TINYINT(1) NOT NULL DEFAULT 0,
+  -- Version des sessions : augmentée au changement de mot de passe ou à la
+  -- suspension, elle invalide les jetons déjà délivrés.
+  token_version INT UNSIGNED NOT NULL DEFAULT 0,
   role ENUM('donor', 'beneficiary', 'association', 'admin') NOT NULL,
   actor_id INT UNSIGNED NULL,
   phone VARCHAR(30) NULL,
@@ -45,6 +48,8 @@ CREATE TABLE IF NOT EXISTS users (
   -- Préférences du compte (recommandations, notifications, favoris),
   -- retrouvées sur tous ses appareils.
   preferences JSON NULL,
+  -- Date de la photo de profil (NULL : initiales) ; le fichier est dans user_photos.
+  photo_updated_at DATETIME NULL,
   -- pending : inscrit, en attente du code reçu par e-mail.
   status ENUM('pending', 'active', 'suspended') NOT NULL DEFAULT 'active',
   status_reason VARCHAR(255) NULL,
@@ -159,6 +164,14 @@ CREATE TABLE IF NOT EXISTS offers (
 
 -- beneficiary_id NULL : réservation faite par un invité (guest_*).
 -- Photo d'une offre, gardée à part pour ne pas alourdir les listes.
+-- Photo de profil, gardée à part pour ne pas alourdir les lectures du compte.
+CREATE TABLE IF NOT EXISTS user_photos (
+  user_id INT UNSIGNED PRIMARY KEY,
+  mime VARCHAR(30) NOT NULL,
+  data MEDIUMBLOB NOT NULL,
+  CONSTRAINT fk_user_photos_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS offer_photos (
   offer_id INT UNSIGNED PRIMARY KEY,
   mime VARCHAR(30) NOT NULL,
@@ -325,6 +338,12 @@ CREATE TABLE IF NOT EXISTS direct_message_photos (
 
 -- Jetons Firebase Cloud Messaging des appareils connectés : une notification
 -- enregistrée est aussi envoyée en push (application fermée comprise).
+-- SMS envoyés par jour (plafond SMS_DAILY_LIMIT, gardé après un redémarrage).
+CREATE TABLE IF NOT EXISTS sms_daily (
+  day DATE NOT NULL PRIMARY KEY,
+  sent INT UNSIGNED NOT NULL DEFAULT 0
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS device_tokens (
   token VARCHAR(255) NOT NULL PRIMARY KEY,
   user_id INT UNSIGNED NOT NULL,

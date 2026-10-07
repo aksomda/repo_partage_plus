@@ -253,6 +253,10 @@ class _SessionListenable extends ChangeNotifier {
   void changed() => notifyListeners();
 }
 
+/// Premier écran : remplacé dans main() par l'accueil du compte quand une
+/// session existe déjà (pas de détour par l'écran de démarrage).
+final initialLocationProvider = Provider<String>((ref) => AppRoutes.splash);
+
 final routerProvider = Provider<GoRouter>((ref) {
   final session = _SessionListenable();
   ref.listen(authTokenProvider, (_, _) => session.changed());
@@ -261,6 +265,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(session.dispose);
 
   final router = createRouter(
+    initialLocation: ref.read(initialLocationProvider),
     isLoggedIn: () => ref.read(authTokenProvider) != null,
     isAdmin: () {
       final profile = ref.read(profileProvider);

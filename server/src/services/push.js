@@ -41,16 +41,17 @@ function stringData(data) {
 /**
  * Envoie une notification push à tous les appareils de l'utilisateur. Ne
  * lève jamais d'erreur : la notification reste dans l'application.
+ * `always` : envoyée même si l'utilisateur a coupé les push (codes de sécurité).
  */
-export async function sendPush(userId, { type, title, body, data }) {
+export async function sendPush(userId, { type, title, body, data }, { always = false } = {}) {
   if (PLANNED_ON_DEVICE.has(type)) return;
   try {
     // Push désactivé par l'utilisateur (profil) : notification dans l'app seulement.
     const rows = await query(
       `SELECT dt.token FROM device_tokens dt JOIN users u ON u.id = dt.user_id
        WHERE dt.user_id = ?
-         AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(u.preferences, '$.push_enabled')), 'true') <> 'false'`,
-      [userId],
+         AND (? OR COALESCE(JSON_UNQUOTE(JSON_EXTRACT(u.preferences, '$.push_enabled')), 'true') <> 'false')`,
+      [userId, always],
     );
     if (rows.length === 0) return;
     const tokens = rows.map((row) => row.token);

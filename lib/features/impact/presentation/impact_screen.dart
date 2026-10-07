@@ -11,6 +11,8 @@ import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widget
 import 'package:repo_partage_plus/features/impact/data/impact_repository.dart';
 import 'package:repo_partage_plus/features/impact/domain/impact_csv.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
+import 'package:repo_partage_plus/core/router/app_routes.dart';
 
 /// Tableau de bord « Mon impact » : compteurs, indicateurs sociaux,
 /// évolution sur 12 mois et répartition par catégorie. Lu sur l'appareil :
@@ -77,7 +79,9 @@ class _ImpactScreenState extends ConsumerState<ImpactScreen> {
     final impact = ref.watch(myImpactProvider);
 
     return Scaffold(
+      drawer: const AppMenu(currentLocation: AppRoutes.impact),
       appBar: AppBar(
+        leading: backOrMenuButton(context),
         title: const Text('Mon impact'),
         actions: [
           if (impact != null)

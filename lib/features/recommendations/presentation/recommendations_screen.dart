@@ -11,10 +11,13 @@ import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widget
 import 'package:repo_partage_plus/features/discovery/presentation/widgets/discovery_widgets.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/features/recommendations/data/offer_search_agent.dart';
 import 'package:repo_partage_plus/features/recommendations/data/preferences.dart';
 import 'package:repo_partage_plus/features/recommendations/data/voice_input.dart';
 import 'package:repo_partage_plus/features/recommendations/domain/hybrid_recommender.dart';
 import 'package:repo_partage_plus/features/recommendations/domain/local_ranker.dart';
+import 'package:repo_partage_plus/features/recommendations/domain/offer_search.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 
 /// Rayon des zones de la vue « par zone », en km.
 const zoneRadiusKm = 0.5;
@@ -48,9 +51,13 @@ class _RecommendationsScreenState extends ConsumerState<RecommendationsScreen> {
   Widget build(BuildContext context) {
     final result = ref.watch(recommendationsProvider);
     final origin = ref.watch(originProvider).place;
+    final search = ref.watch(offerSearchProvider).result;
+    final items = applySearch(result.items, search);
 
     return Scaffold(
+      drawer: const AppMenu(currentLocation: AppRoutes.recommendations),
       appBar: AppBar(
+        leading: backOrMenuButton(context),
         title: const Text('Recommandations'),
         actions: [
           IconButton(
@@ -71,18 +78,30 @@ class _RecommendationsScreenState extends ConsumerState<RecommendationsScreen> {
             const SizedBox(height: 8),
             _SourceBanner(source: result.source),
             const SizedBox(height: 8),
-            if (result.items.isEmpty)
-              const EmptyState(
-                icon: Icons.search_off,
-                title: 'Aucune offre à recommander',
-                message:
-                    'Élargissez la distance maximale ou tirez vers le bas '
-                    'pour actualiser.',
-              )
+            if (search != null)
+              _SearchBanner(result: search, count: items.length),
+            if (items.isEmpty)
+              search != null
+                  ? EmptyState(
+                      icon: Icons.search_off,
+                      title: 'Aucune offre ne correspond',
+                      message: '« ${search.request} »',
+                      action: OutlinedButton(
+                        onPressed: ref.read(offerSearchProvider.notifier).clear,
+                        child: const Text('Tout afficher'),
+                      ),
+                    )
+                  : const EmptyState(
+                      icon: Icons.search_off,
+                      title: 'Aucune offre à recommander',
+                      message:
+                          'Élargissez la distance maximale ou tirez vers le bas '
+                          'pour actualiser.',
+                    )
             else if (_byZone && origin != null)
-              ..._zones(result.items, origin)
+              ..._zones(items, origin)
             else
-              for (final item in result.items.take(50)) _RecoCard(item: item),
+              for (final item in items.take(50)) _RecoCard(item: item),
           ],
         ),
       ),
@@ -193,13 +212,62 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
   Future<void> _save(RecoPreferences preferences) =>
       ref.read(recoPreferencesProvider.notifier).update(preferences);
 
+  List<RankedOffer> get _items => ref.read(recommendationsProvider).items;
+
+  OfferSearchController get _search => ref.read(offerSearchProvider.notifier);
+
+  /// Demande écrite ou dictée : préférences enregistrées, classement
+  /// affiné, puis liste filtrée par l'agent IA.
   Future<void> _submitText() async {
     FocusScope.of(context).unfocus();
-    await _save(_prefs.copyWith(text: _text.text.trim()));
+    final text = _text.text.trim();
+    await _save(_prefs.copyWith(text: text));
+    final outcome = await _search.searchText(text, _items);
+    if (mounted) _show(outcome);
     await ref.read(recommendationsControllerProvider.notifier).refine();
   }
 
+  /// Micro : enregistre la voix (l'agent retranscrit et filtre) ; sinon,
+  /// dictée de l'appareil.
   Future<void> _toggleVoice() async {
+    final phase = ref.read(offerSearchProvider).phase;
+    if (phase == OfferSearchPhase.recording) return _sendRecording();
+    if (_listening) return _dictate();
+    final outcome = await _search.startRecording(onLimit: _sendRecording);
+    if (outcome is SearchNeedsDictation && mounted) {
+      if (outcome.reason != null) {
+        showMessage(context, '${outcome.reason} : dictée de l’appareil');
+      }
+      await _dictate();
+    }
+  }
+
+  Future<void> _sendRecording() async {
+    final outcome = await _search.stopAndSearch(_items);
+    if (!mounted) return;
+    if (outcome case SearchDone(:final result)) {
+      _text.text = result.request;
+      await _save(_prefs.copyWith(text: result.request));
+      await ref.read(recommendationsControllerProvider.notifier).refine();
+    } else if (outcome case SearchNeedsDictation(:final reason)) {
+      showMessage(
+        context,
+        '${reason ?? 'IA indisponible'} : dictée de l’appareil',
+      );
+      await _dictate();
+    } else {
+      _show(outcome);
+    }
+  }
+
+  void _show(OfferSearchOutcome? outcome) {
+    if (outcome case SearchFailed(:final message)) {
+      showMessage(context, message, error: true);
+    }
+  }
+
+  /// Dictée de l'appareil (reconnaissance vocale du système).
+  Future<void> _dictate() async {
     final voice = ref.read(voiceInputProvider);
     if (_listening) {
       await voice.stop();
@@ -233,6 +301,9 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
     final prefs = ref.watch(recoPreferencesProvider);
     final categories = ref.watch(categoriesProvider);
     final refining = ref.watch(recommendationsControllerProvider).refining;
+    final search = ref.watch(offerSearchProvider);
+    final recording = search.phase == OfferSearchPhase.recording;
+    final thinking = search.phase == OfferSearchPhase.thinking;
     if (!_filled && prefs.text.isNotEmpty) {
       _text.text = prefs.text;
       _filled = true;
@@ -256,16 +327,42 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
                 counterText: '',
                 prefixIcon: const Icon(Icons.auto_awesome_outlined),
                 suffixIcon: IconButton(
-                  tooltip: _listening ? 'Arrêter la dictée' : 'Dicter',
+                  tooltip: recording
+                      ? 'Envoyer l’enregistrement'
+                      : _listening
+                      ? 'Arrêter la dictée'
+                      : 'Parler',
                   icon: Icon(
-                    _listening ? Icons.stop_circle_outlined : Icons.mic_none,
-                    color: _listening ? AppColors.danger : null,
+                    recording || _listening
+                        ? Icons.stop_circle_outlined
+                        : Icons.mic_none,
+                    color: recording || _listening ? AppColors.danger : null,
                   ),
-                  onPressed: _toggleVoice,
+                  onPressed: thinking ? null : _toggleVoice,
                 ),
               ),
             ),
-            if (_listening)
+            if (recording)
+              _RecordingBar(
+                startedAt: search.startedAt ?? DateTime.now(),
+                onCancel: _search.cancelRecording,
+              )
+            else if (thinking)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinearProgressIndicator(),
+                    SizedBox(height: 4),
+                    Text(
+                      'L’IA analyse votre demande…',
+                      style: TextStyle(color: AppColors.primary, fontSize: 12),
+                    ),
+                  ],
+                ),
+              )
+            else if (_listening)
               const Padding(
                 padding: EdgeInsets.only(top: 6),
                 child: Text(
@@ -275,8 +372,8 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
               ),
             const SizedBox(height: 8),
             FilledButton.icon(
-              onPressed: refining ? null : _submitText,
-              icon: refining
+              onPressed: refining || thinking || recording ? null : _submitText,
+              icon: refining || thinking
                   ? const SizedBox(
                       width: 16,
                       height: 16,
@@ -391,6 +488,105 @@ class _PreferencesPanelState extends ConsumerState<_PreferencesPanel> {
       child: Text(text, style: const TextStyle(color: AppColors.textMuted)),
     ),
   );
+}
+
+/// Enregistrement en cours : durée, rappel du geste pour envoyer, annuler.
+class _RecordingBar extends StatelessWidget {
+  const _RecordingBar({required this.startedAt, required this.onCancel});
+
+  final DateTime startedAt;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.fiber_manual_record,
+            color: AppColors.danger,
+            size: 14,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: StreamBuilder<int>(
+              stream: Stream.periodic(const Duration(seconds: 1), (i) => i),
+              builder: (context, _) {
+                final elapsed = DateTime.now().difference(startedAt).inSeconds;
+                final left =
+                    OfferSearchController.maxRecording.inSeconds - elapsed;
+                return Text(
+                  'Enregistrement ${elapsed ~/ 60}:'
+                  '${(elapsed % 60).toString().padLeft(2, '0')} · touchez ■ '
+                  'pour envoyer${left <= 10 ? ' ($left s)' : ''}',
+                  style: const TextStyle(color: AppColors.danger, fontSize: 12),
+                );
+              },
+            ),
+          ),
+          TextButton(onPressed: onCancel, child: const Text('Annuler')),
+        ],
+      ),
+    );
+  }
+}
+
+/// Filtre de l'agent IA appliqué à la liste, retirable.
+class _SearchBanner extends ConsumerWidget {
+  const _SearchBanner({required this.result, required this.count});
+
+  final OfferSearchResult result;
+  final int count;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+        decoration: BoxDecoration(
+          color: AppColors.primarySoft,
+          borderRadius: BorderRadius.circular(AppTheme.radius),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.auto_awesome, color: AppColors.primary, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '« ${result.request} »',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    result.summary ??
+                        '${count <= 1 ? '$count offre retenue' : '$count offres retenues'}'
+                            ' par ${result.engine}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  if (result.summary != null)
+                    Text(
+                      '${count <= 1 ? '$count offre' : '$count offres'} · filtré par ${result.engine}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textMuted,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: ref.read(offerSearchProvider.notifier).clear,
+              child: const Text('Tout afficher'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Indique si le classement vient de l'IA ou de l'appareil.

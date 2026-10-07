@@ -18,6 +18,7 @@ abstract final class ApiEndpoints {
   static const me = '/auth/me';
   static const updateMe = '/users/me';
   static const changePassword = '/users/me/password';
+  static const myPhoto = '/users/me/photo';
   static const devices = '/users/me/devices';
   static const donorAdvice = '/recommendations/advice';
   static const offerDraft = '/recommendations/offer-draft';
@@ -58,6 +59,9 @@ abstract final class ApiEndpoints {
   // Messagerie entre utilisateurs (publieur et bénéficiaire)
   static const directMessages = '/direct-messages';
   static const readDirectMessages = '/direct-messages/read';
+
+  /// Recherche à la voix ou au texte (IA ouverte du serveur : Groq…).
+  static const voiceSearch = '/recommendations/voice-search';
   static String directMessagePhoto(int id, int position) =>
       '/direct-messages/$id/photos/$position';
   static String messagePhoto(int id, int position) =>
