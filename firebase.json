@@ -1,13 +1,22 @@
 {
   "functions": [
     {
-      "source": "functions",
       "codebase": "default",
       "ignore": [
         "node_modules",
         "test",
         ".git",
         "*.log"
+      ],
+      "source": "functions"
+    },
+    {
+      "source": "partageplusai",
+      "codebase": "partageplusai",
+      "disallowLegacyRuntimeConfig": true,
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint",
+        "npm --prefix \"$RESOURCE_DIR\" run build"
       ]
     }
   ],

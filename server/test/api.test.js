@@ -22,12 +22,17 @@ const { firestoreMirror, flushFirestoreMirror, setFirestoreStore } = await impor
   '../src/services/firestore_mirror.js'
 );
 const { config } = await import('../src/config.js');
-const { setRodiumFetch, resetAiRateLimit } = await import('../src/routes/ai.js');
+const { setRodiumFetch, setVoiceFetch, resetAiRateLimit } = await import(
+  '../src/routes/ai.js'
+);
 const { HttpError } = await import('../src/http/errors.js');
 const { fillMonths, MONTHS } = await import('../src/routes/impact.js');
 const { isDatabaseUnavailable } = await import('../src/db/pool.js');
 const { setPushSender } = await import('../src/services/push.js');
+const { normalizePhone, setSmsFetch } = await import('../src/services/sms.js');
+const { flushCodeExtras } = await import('../src/services/otp.js');
 const { resetLoginAttempts, MAX_FAILURES } = await import('../src/http/login_attempts.js');
+const rateLimitModule = await import('../src/http/rate_limit.js');
 
 // Faux Firebase : un jeton « fake:<uid>:<email>:… » est accepté tel quel.
 const firebaseCalls = [];
@@ -1082,13 +1087,21 @@ describe('administration', () => {
     assert.equal(again.status, 409);
     assert.equal(again.body.details.code, 'email_taken');
 
-    if (admin) {
-      const asAdmin = await api
-        .post('/api/admin/users')
-        .set(as('admin'))
-        .send({ ...account, email: 'autre.admin@test.local', actor_id: admin.id });
-      assert.equal(asAdmin.status, 400);
-    }
+    // Administrateur : possible ; association : elle s'inscrit elle-même.
+    const asAdmin = await api
+      .post('/api/admin/users')
+      .set(as('admin'))
+      .send({ ...account, email: 'autre.admin@test.local', actor_id: admin.id });
+    assert.equal(asAdmin.status, 201, asAdmin.text);
+    assert.equal(asAdmin.body.role, 'admin');
+    const association = actors.body.find(
+      (actor) => actor.permission_role === 'association',
+    );
+    const asAssociation = await api
+      .post('/api/admin/users')
+      .set(as('admin'))
+      .send({ ...account, email: 'asso.ajout@test.local', actor_id: association.id });
+    assert.equal(asAssociation.status, 400);
 
     const notAdmin = await api.post('/api/admin/users').set(as('donor')).send(account);
     assert.equal(notAdmin.status, 403);
@@ -1509,6 +1522,105 @@ describe('e-mails envoyés par Firebase (extension Trigger Email)', () => {
   });
 });
 
+describe('recherche à la voix (IA ouverte, API compatible OpenAI)', () => {
+  const audio = `data:audio/mp4;base64,${Buffer.from('enregistrement factice').toString('base64')}`;
+  const calls = [];
+  let savedKey;
+
+  before(() => {
+    savedKey = config.voiceAi.apiKey;
+    config.voiceAi.apiKey = 'gsk_test';
+    resetAiRateLimit();
+    // Fausse API : retranscription, puis filtrage (avec un id inventé).
+    setVoiceFetch(async (url, options) => {
+      calls.push({ url, body: options.body });
+      if (url.endsWith('/audio/transcriptions')) {
+        return Response.json({ text: 'Je veux du riz gras' });
+      }
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ keep_ids: [riz, 999999], summary: 'Du riz gras' }),
+            },
+          },
+        ],
+      });
+    });
+  });
+
+  after(() => {
+    config.voiceAi.apiKey = savedKey;
+    setVoiceFetch(null);
+  });
+
+  let riz;
+  let pain;
+  before(async () => {
+    const [rows] = await pool.query(
+      "SELECT id, title FROM offers WHERE status = 'published' ORDER BY id LIMIT 2",
+    );
+    [riz, pain] = rows.map((row) => row.id);
+  });
+
+  test('audio : retranscrit, puis seules les offres retenues (id vérifiés)', async () => {
+    calls.length = 0;
+    const res = await api
+      .post('/api/recommendations/voice-search')
+      .send({ audio, candidates: [{ id: riz, distance_km: 0.4 }, { id: pain }] });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.transcript, 'Je veux du riz gras');
+    assert.deepEqual(res.body.keep_ids, [riz]);
+    assert.equal(res.body.summary, 'Du riz gras');
+    assert.equal(res.body.engine, 'Groq');
+
+    assert.ok(calls[0].url.endsWith('/audio/transcriptions'));
+    assert.equal(calls[0].body.get('model'), config.voiceAi.sttModel);
+    assert.equal(calls[0].body.get('language'), 'fr');
+    assert.equal(calls[0].body.get('file').name, 'demande.m4a');
+    // Offres relues dans MySQL : titres envoyés au modèle.
+    const prompt = JSON.parse(calls[1].body).messages[1].content;
+    assert.match(prompt, /Je veux du riz gras/);
+    assert.match(prompt, /"titre"/);
+  });
+
+  test('texte : pas de retranscription', async () => {
+    calls.length = 0;
+    const res = await api
+      .post('/api/recommendations/voice-search')
+      .send({ text: 'riz gras', candidates: [{ id: riz }] });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.body.transcript, 'riz gras');
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].url.endsWith('/chat/completions'));
+  });
+
+  test('refus : demande vide, audio invalide ; panne : 503 ; sans clé : 503', async () => {
+    const empty = await api
+      .post('/api/recommendations/voice-search')
+      .send({ candidates: [{ id: riz }] });
+    assert.equal(empty.status, 400);
+    const pdf = await api
+      .post('/api/recommendations/voice-search')
+      .send({ audio: 'data:application/pdf;base64,JVBERi0=', candidates: [{ id: riz }] });
+    assert.equal(pdf.status, 400);
+
+    setVoiceFetch(async () => new Response('quota', { status: 429 }));
+    const down = await api
+      .post('/api/recommendations/voice-search')
+      .send({ text: 'riz', candidates: [{ id: riz }] });
+    assert.equal(down.status, 503);
+    assert.equal(down.body.details.code, 'voice_ai_unavailable');
+
+    config.voiceAi.apiKey = null;
+    const off = await api
+      .post('/api/recommendations/voice-search')
+      .send({ text: 'riz', candidates: [{ id: riz }] });
+    assert.equal(off.status, 503);
+    assert.equal(off.body.details.code, 'voice_ai_not_configured');
+  });
+});
+
 describe('sans Firebase (Windows / Linux) : compte local et IA du serveur', () => {
   const prompts = [];
 
@@ -1842,6 +1954,15 @@ describe('push, créneau de retrait, compte désactivé, expiration, connexion',
     const back = await api.get('/api/offers?q=donateur%20suspendu');
     assert.equal(back.body.length, 1);
     assert.equal(back.body[0].quantity_available, 3);
+
+    // Jeton délivré avant la suspension : révoqué, même après la réactivation.
+    const stale = await api.get('/api/auth/me').set(as('donor2'));
+    assert.equal(stale.status, 401);
+    const session = await api
+      .post('/api/auth/login')
+      .send({ email: 'donateur.corrections@test.local', password: 'Provisoire1' });
+    assert.equal(session.status, 200, session.text);
+    tokens.donor2 = session.body.token;
   });
 
   test('expiration : le bénéficiaire est prévenu de l’annulation', async () => {
@@ -1883,6 +2004,40 @@ describe('push, créneau de retrait, compte désactivé, expiration, connexion',
 });
 
 describe('profil, préférences et créneaux de retrait', () => {
+  test('photo de profil : ajout, affichage public, remplacement, retrait', async () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60)]);
+    const photo = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+
+    const none = await api.get('/api/auth/me').set(as('beneficiary'));
+    assert.equal(none.body.photo_path ?? null, null);
+
+    const invalid = await api
+      .put('/api/users/me/photo')
+      .set(as('beneficiary'))
+      .send({ photo: `data:image/png;base64,${Buffer.from('pas une image').toString('base64')}` });
+    assert.equal(invalid.status, 400);
+    const missing = await api.put('/api/users/me/photo').set(as('beneficiary')).send({});
+    assert.equal(missing.status, 400);
+    const anonymous = await api.put('/api/users/me/photo').send({ photo });
+    assert.equal(anonymous.status, 401);
+
+    const saved = await api.put('/api/users/me/photo').set(as('beneficiary')).send({ photo });
+    assert.equal(saved.status, 200, saved.text);
+    assert.match(saved.body.photo_path, /^\/users\/\d+\/photo\?v=\d+$/);
+
+    // Servie sans compte (affichée aux autres usagers), au bon format.
+    const image = await api.get(`/api${saved.body.photo_path}`);
+    assert.equal(image.status, 200);
+    assert.equal(image.headers['content-type'], 'image/jpeg');
+    assert.deepEqual(image.body, jpeg);
+
+    const removed = await api.delete('/api/users/me/photo').set(as('beneficiary'));
+    assert.equal(removed.status, 200);
+    assert.equal(removed.body.photo_path, null);
+    const gone = await api.get(`/api${saved.body.photo_path}`);
+    assert.equal(gone.status, 404);
+  });
+
   const pushes = [];
   let categoryId;
 
@@ -2654,5 +2809,234 @@ describe('Firebase injoignable, MySQL disponible : rien de bloqué, recopie ensu
     const state = await syncState('panne@test.local');
     assert.equal(state.firebase_uid, account.uid);
     assert.equal(state.firebase_sync_at, null);
+  });
+});
+
+describe('codes aussi par SMS (téléphone passerelle) et par push', () => {
+  const sms = [];
+  const pushes = [];
+  const signupToken = `signup-device-${'x'.repeat(20)}`;
+  let actorId;
+
+  before(async () => {
+    actorId = (await api.get('/api/actors')).body.find((actor) => actor.code === 'particulier').id;
+    setSmsFetch(async (url, options) => {
+      sms.push({ url, auth: options.headers.Authorization, body: JSON.parse(options.body) });
+      return new Response('{}', { status: 202 });
+    });
+    setPushSender({
+      async send(tokens, message) {
+        pushes.push({ tokens, message });
+        return tokens.map(() => null);
+      },
+    });
+    Object.assign(config.sms, {
+      provider: 'android-gateway',
+      gatewayUrl: 'http://192.168.1.20:8080/message',
+      username: 'sms',
+      password: 'secret',
+      dailyLimit: 10,
+    });
+    await pool.query('DELETE FROM sms_daily');
+  });
+
+  after(() => {
+    setSmsFetch(null);
+    setPushSender(null);
+    config.sms.provider = null;
+  });
+
+  test('numéros : indicatif ajouté, formats invalides refusés', () => {
+    assert.equal(normalizePhone('70 11 22 33', '+226'), '+22670112233');
+    assert.equal(normalizePhone('+226 70 11 22 33'), '+22670112233');
+    assert.equal(normalizePhone('0022670112233'), '+22670112233');
+    assert.equal(normalizePhone('abc'), null);
+    assert.equal(normalizePhone(null), null);
+  });
+
+  test('activation : e-mail, SMS et push vers le téléphone de l’inscription', async () => {
+    const res = await api.post('/api/auth/register').send({
+      email: 'sms.push@test.local',
+      password: 'motdepasse1',
+      first_name: 'Ali',
+      last_name: 'Sawadogo',
+      gender: 'male',
+      age: 30,
+      phone: '70 11 22 33',
+      actor_id: actorId,
+      device_token: signupToken,
+      device_platform: 'android',
+    });
+    assert.equal(res.status, 201, res.text);
+    await flushCodeExtras();
+    const code = lastCode('sms.push@test.local');
+    assert.ok(code);
+
+    const sent = sms.at(-1);
+    assert.equal(sent.url, 'http://192.168.1.20:8080/message');
+    assert.equal(sent.auth, `Basic ${Buffer.from('sms:secret').toString('base64')}`);
+    assert.deepEqual(sent.body.phoneNumbers, ['+22670112233']);
+    assert.match(sent.body.textMessage.text, new RegExp(`Code d'activation : ${code}`));
+    // Un seul SMS : moins de 160 caractères, sans apostrophe typographique.
+    assert.ok(sent.body.textMessage.text.length <= 160);
+
+    const push = pushes.at(-1);
+    assert.deepEqual(push.tokens, [signupToken]);
+    assert.equal(push.message.data.type, 'otp_code');
+    assert.equal(push.message.data.purpose, 'activation');
+    assert.equal(push.message.data.code, code);
+  });
+
+  test('mot de passe oublié : push aux appareils du compte, jamais au demandeur', async () => {
+    const accountDevice = `beneficiary-device-${'x'.repeat(20)}`;
+    const added = await api
+      .post('/api/users/me/devices')
+      .set(as('beneficiary'))
+      .send({ token: accountDevice, platform: 'android' });
+    assert.equal(added.status, 204);
+
+    pushes.length = 0;
+    const res = await api.post('/api/auth/password/forgot').send({ email: 'beneficiaire@demo.local' });
+    assert.equal(res.status, 204);
+    await flushCodeExtras();
+    const code = lastCode('beneficiaire@demo.local');
+    assert.equal(pushes.length, 1);
+    assert.ok(pushes[0].tokens.includes(accountDevice));
+    assert.equal(pushes[0].message.data.purpose, 'password_reset');
+    assert.equal(pushes[0].message.data.code, code);
+    assert.match(sms.at(-1).body.textMessage.text, new RegExp(code));
+
+    await api.delete('/api/users/me/devices').set(as('beneficiary')).send({ token: accountDevice });
+  });
+
+  test('plafond journalier : au-delà, plus de SMS (l’e-mail part toujours)', async () => {
+    await pool.query('DELETE FROM sms_daily');
+    config.sms.dailyLimit = 1;
+    sms.length = 0;
+    for (const email of ['admin@demo.local', 'commerce@demo.local']) {
+      const res = await api.post('/api/auth/password/forgot').send({ email });
+      assert.equal(res.status, 204);
+    }
+    await flushCodeExtras();
+    assert.equal(sms.length, 1);
+    assert.ok(sentMails.some((mail) => mail.to === 'commerce@demo.local'));
+    config.sms.dailyLimit = 10;
+  });
+
+  test('passerelle en panne ou SMS désactivé : la demande aboutit quand même', async () => {
+    await pool.query('DELETE FROM sms_daily');
+    setSmsFetch(async () => new Response('panne', { status: 500 }));
+    const down = await api.post('/api/auth/password/forgot').send({ email: 'restaurant@demo.local' });
+    assert.equal(down.status, 204);
+    await flushCodeExtras();
+    // Envoi raté : il ne compte pas dans le plafond.
+    const [[day]] = await pool.query('SELECT sent FROM sms_daily WHERE day = CURDATE()');
+    assert.equal(day.sent, 0);
+
+    config.sms.provider = null;
+    sms.length = 0;
+    setSmsFetch(async () => {
+      sms.push('envoyé');
+      return new Response('{}', { status: 202 });
+    });
+    const off = await api.post('/api/auth/password/forgot').send({ email: 'association@demo.local' });
+    assert.equal(off.status, 204);
+    await flushCodeExtras();
+    assert.equal(sms.length, 0);
+  });
+});
+
+describe('sécurité : en-têtes, jetons, limites de débit', () => {
+  const { resetRateLimits, WindowCounter } = rateLimitModule;
+
+  test('en-têtes de sécurité, sans X-Powered-By', async () => {
+    const res = await api.get('/api/categories');
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['x-content-type-options'], 'nosniff');
+    assert.equal(res.headers['x-frame-options'], 'DENY');
+    assert.match(res.headers['content-security-policy'], /default-src 'none'/);
+    assert.equal(res.headers['x-powered-by'], undefined);
+
+    const me = await api.get('/api/auth/me').set(as('admin'));
+    assert.equal(me.headers['cache-control'], 'no-store');
+  });
+
+  test('jeton non signé (alg none) ou signé avec une autre clé : refusé', async () => {
+    const { default: jwt } = await import('jsonwebtoken');
+    const [[admin]] = await pool.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
+    const payload = { sub: String(admin.id), role: 'admin', ver: 0 };
+    const unsigned = jwt.sign(payload, null, { algorithm: 'none' });
+    const forged = jwt.sign(payload, 'autre-secret');
+    for (const token of [unsigned, forged]) {
+      const res = await api.get('/api/admin/stats').set('Authorization', `Bearer ${token}`);
+      assert.equal(res.status, 401);
+    }
+  });
+
+  test('changement de mot de passe : autres sessions révoquées, nouveau jeton remis', async () => {
+    const actors = await api.get('/api/actors');
+    const particulier = actors.body.find((actor) => actor.code === 'particulier');
+    const created = await api.post('/api/admin/users').set(as('admin')).send({
+      first_name: 'Session',
+      last_name: 'Revoquee',
+      email: 'session.revoquee@test.local',
+      actor_id: particulier.id,
+      password: 'Ancien1234',
+    });
+    assert.equal(created.status, 201, created.text);
+    const login = (password) =>
+      api.post('/api/auth/login').send({ email: 'session.revoquee@test.local', password });
+    const first = (await login('Ancien1234')).body.token;
+    const second = (await login('Ancien1234')).body.token;
+
+    const changed = await api
+      .put('/api/users/me/password')
+      .set('Authorization', `Bearer ${first}`)
+      .send({ current_password: 'Ancien1234', new_password: 'Nouveau1234' });
+    assert.equal(changed.status, 200, changed.text);
+
+    const other = await api.get('/api/auth/me').set('Authorization', `Bearer ${second}`);
+    assert.equal(other.status, 401);
+    const current = await api
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${changed.body.token}`);
+    assert.equal(current.status, 200);
+    assert.equal(current.body.token_version, undefined);
+    assert.equal((await login('Nouveau1234')).status, 200);
+  });
+
+  test('Idempotency-Key trop courte : refusée', async () => {
+    const res = await api
+      .post('/api/reservations')
+      .set('Idempotency-Key', 'court-123')
+      .send({});
+    assert.equal(res.status, 400);
+  });
+
+  test('compteur : bloqué au-delà du maximum, libéré à la fin de la fenêtre', () => {
+    const counter = new WindowCounter({ max: 2, windowMs: 1000 });
+    assert.equal(counter.hit('a', 0).allowed, true);
+    assert.equal(counter.hit('a', 10).allowed, true);
+    assert.equal(counter.peek('a', 20).blocked, true);
+    assert.equal(counter.hit('a', 30).allowed, false);
+    assert.equal(counter.hit('b', 30).allowed, true);
+    assert.equal(counter.hit('a', 1001).allowed, true);
+  });
+
+  test('routes de codes : 429 au-delà de la limite par adresse IP', async () => {
+    config.rateLimit.enabled = true;
+    resetRateLimits();
+    try {
+      let last;
+      for (let i = 0; i <= config.rateLimit.authPer15Minutes; i += 1) {
+        last = await api.post('/api/auth/password/forgot').send({ email: 'inconnu@test.local' });
+      }
+      assert.equal(last.status, 429);
+      assert.equal(last.body.details.code, 'rate_limited');
+      assert.ok(Number(last.headers['retry-after']) > 0);
+    } finally {
+      config.rateLimit.enabled = false;
+      resetRateLimits();
+    }
   });
 });

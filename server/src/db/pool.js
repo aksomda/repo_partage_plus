@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 
 import { config } from '../config.js';
+import { openTunnel } from './tunnel.js';
 
 /** Options de connexion communes au pool, aux migrations et aux tests. */
 export function connectionOptions({ withDatabase = true } = {}) {
@@ -15,9 +16,10 @@ export function connectionOptions({ withDatabase = true } = {}) {
     return { uri: config.db.url, ...common };
   }
 
+  const tunnel = config.sshTunnel;
   return {
-    host: config.db.host,
-    port: config.db.port,
+    host: tunnel ? '127.0.0.1' : config.db.host,
+    port: tunnel ? tunnel.localPort : config.db.port,
     user: config.db.user,
     password: config.db.password,
     database: withDatabase ? config.db.database : undefined,
@@ -25,10 +27,22 @@ export function connectionOptions({ withDatabase = true } = {}) {
   };
 }
 
+// Avant le pool, les migrations et les scripts : tous importent ce module.
+if (!config.db.url) await openTunnel();
+
+// Ouvrir une connexion coûte plusieurs allers-retours (TCP, authentification,
+// fuseau horaire), très lents à travers le tunnel SSH : les connexions
+// inactives sont gardées 10 min (au-delà de la synchronisation des
+// applications, toutes les 2 min) et maintenues ouvertes. Assez de
+// connexions pour les ~20 requêtes parallèles de GET /sync administrateur.
 export const pool = mysql.createPool({
   ...connectionOptions(),
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 20,
+  maxIdle: 20,
+  idleTimeout: 10 * 60_000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 30_000,
 });
 
 // Les DATETIME sont en UTC : NOW() et CURRENT_TIMESTAMP doivent l'être aussi.

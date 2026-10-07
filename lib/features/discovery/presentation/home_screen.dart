@@ -14,6 +14,7 @@ import 'package:repo_partage_plus/features/discovery/presentation/widgets/discov
 import 'package:repo_partage_plus/features/impact/data/impact_repository.dart';
 import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 
 /// Accueil : offres à proximité du point de départ, accessible sans compte.
 class HomeScreen extends ConsumerStatefulWidget {
@@ -39,10 +40,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final loggedIn = ref.watch(authTokenProvider) != null;
-    final name = ref.watch(profileProvider)?['name'] as String?;
+    final profile = ref.watch(profileProvider);
+    final name = profile?['name'] as String?;
     final filters = ref.watch(offerFiltersProvider);
 
     return Scaffold(
+      drawer: const AppMenu(currentLocation: AppRoutes.home),
       appBar: AppBar(
         // Sans compte : le logo ramène à l'écran d'accueil du démarrage.
         title: loggedIn
@@ -78,7 +81,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 child: InkWell(
                   customBorder: const CircleBorder(),
                   onTap: () => context.go(AppRoutes.profile),
-                  child: ProfileAvatar(name: name ?? ''),
+                  child: ProfileAvatar(
+                    name: name ?? '',
+                    photoUrl: profilePhotoUrl(profile),
+                  ),
                 ),
               ),
             ),

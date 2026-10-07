@@ -14,6 +14,7 @@ import 'package:repo_partage_plus/features/discovery/presentation/widgets/discov
 import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 
 /// Carte des offres autour du point de départ (sans compte).
 class NearbyOffersMapScreen extends ConsumerStatefulWidget {
@@ -129,7 +130,11 @@ class _NearbyOffersMapScreenState extends ConsumerState<NearbyOffersMapScreen> {
     });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Offres à proximité')),
+      drawer: const AppMenu(currentLocation: AppRoutes.nearbyMap),
+      appBar: AppBar(
+        leading: backOrMenuButton(context),
+        title: const Text('Offres à proximité'),
+      ),
       body: Column(
         children: [
           const OriginBar(),

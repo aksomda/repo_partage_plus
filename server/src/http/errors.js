@@ -39,6 +39,15 @@ export function errorHandler(error, req, res, next) {
     return res.status(400).json({ error: 'JSON invalide' });
   }
 
+  if (error.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Requête trop volumineuse' });
+  }
+
+  // Autres erreurs de lecture de la requête (encodage…) : jamais de détail interne.
+  if (error.type && Number.isInteger(error.status) && error.status >= 400 && error.status < 500) {
+    return res.status(error.status).json({ error: 'Requête invalide' });
+  }
+
   // Base arrêtée ou injoignable : réponse claire, le serveur continue.
   if (isDatabaseUnavailable(error)) {
     console.error('MySQL indisponible :', error.code ?? error.message);

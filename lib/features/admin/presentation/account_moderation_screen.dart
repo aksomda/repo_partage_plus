@@ -298,7 +298,8 @@ class _AccountModerationScreenState
         Expanded(
           child: RefreshIndicator(
             onRefresh: () => _refresh(manual: true),
-            child: list,
+            // Noms, emails… sélectionnables pour pouvoir les copier.
+            child: SelectionArea(child: list),
           ),
         ),
       ],
@@ -846,11 +847,13 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Particulier, commerçant, restaurateur ou administrateur : une
+    // association s'inscrit elle-même (informations à faire valider).
     final actors = [
       for (final actor in ref.watch(actorsProvider))
         if (actor['active'] != false &&
             actor['active'] != 0 &&
-            actor['permission_role'] != 'admin')
+            actor['permission_role'] != 'association')
           actor,
     ];
 
@@ -922,16 +925,13 @@ class _AddUserDialogState extends ConsumerState<_AddUserDialog> {
                       value == null ? 'Rôle obligatoire' : null,
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
+                PasswordField(
                   controller: _password,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Mot de passe provisoire',
-                    helperText:
-                        'À communiquer à l’utilisateur ; modifiable via '
-                        '« Mot de passe oublié ».',
-                    helperMaxLines: 2,
-                  ),
+                  hint: '',
+                  label: 'Mot de passe provisoire',
+                  helper:
+                      'À communiquer à l’utilisateur ; modifiable via '
+                      '« Mot de passe oublié ».',
                   validator: validatePassword,
                 ),
               ],

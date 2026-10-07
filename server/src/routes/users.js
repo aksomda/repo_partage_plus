@@ -5,12 +5,40 @@ import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
 import { HttpError } from '../http/errors.js';
-import { latitude, longitude } from '../http/validation.js';
-import { loadProfile, password } from './auth.js';
+import { idParam, latitude, longitude } from '../http/validation.js';
+import { photoSchema, saveUserPhoto } from '../services/photos.js';
+import { BCRYPT_ROUNDS, issueToken, loadProfile, password } from './auth.js';
 
 export const usersRouter = Router();
 
+// Photo de profil, publique comme les photos d'offres (affichée dans les
+// messages) : l'URL change à chaque nouvelle photo, d'où un cache long.
+usersRouter.get('/:id/photo', async (req, res) => {
+  const { id: userId } = idParam.parse(req.params);
+  const [photo] = await query(
+    `SELECT p.mime, p.data FROM user_photos p JOIN users u ON u.id = p.user_id
+     WHERE p.user_id = ? AND u.status = 'active'`,
+    [userId],
+  );
+  if (!photo) throw new HttpError(404, 'Photo introuvable');
+  res.set('Cache-Control', 'public, max-age=604800, immutable').type(photo.mime).send(photo.data);
+});
+
 usersRouter.use(authenticate);
+
+const userPhotoSchema = z.object({ photo: photoSchema.unwrap().unwrap() });
+
+// Ajoute ou remplace la photo de profil (`data:image/jpeg;base64,…`).
+usersRouter.put('/me/photo', async (req, res) => {
+  const { photo } = userPhotoSchema.parse(req.body);
+  await saveUserPhoto(req.user.id, photo);
+  res.json(await loadProfile(req.user.id));
+});
+
+usersRouter.delete('/me/photo', async (req, res) => {
+  await saveUserPhoto(req.user.id, null);
+  res.json(await loadProfile(req.user.id));
+});
 
 /** Taille maximale des préférences enregistrées (JSON). */
 const MAX_PREFERENCES_BYTES = 16_000;
@@ -88,11 +116,13 @@ usersRouter.put('/me/password', async (req, res) => {
   if (!(await bcrypt.compare(data.current_password, row.password_hash))) {
     throw new HttpError(400, 'Mot de passe actuel incorrect');
   }
-  await query('UPDATE users SET password_hash = ? WHERE id = ?', [
-    await bcrypt.hash(data.new_password, 10),
-    req.user.id,
-  ]);
-  res.status(204).end();
+  // Les autres sessions du compte sont révoquées ; celle-ci reçoit un
+  // nouveau jeton.
+  await query(
+    'UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?',
+    [await bcrypt.hash(data.new_password, BCRYPT_ROUNDS), req.user.id],
+  );
+  res.json({ token: await issueToken(req.user.id) });
 });
 
 const deviceSchema = z.object({

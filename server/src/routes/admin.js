@@ -14,7 +14,7 @@ import { sendMail } from '../services/mailer.js';
 import { notify } from '../services/notifications.js';
 import { OFFER_SELECT } from '../services/offers.js';
 import { loadSettings, saveSettings, settingsSchema } from '../services/settings.js';
-import { email, password } from './auth.js';
+import { BCRYPT_ROUNDS, email, password } from './auth.js';
 import { buildGlobalImpact } from './impact.js';
 import { forViewer, releaseQuantity, RESERVATION_SELECT } from './reservations.js';
 
@@ -265,8 +265,9 @@ adminRouter.post('/users', async (req, res) => {
 
   const [actor] = await query('SELECT * FROM actors WHERE id = ?', [data.actor_id]);
   if (!actor || !actor.active) throw new HttpError(400, 'Acteur inconnu ou désactivé');
-  if (actor.permission_role === 'admin') {
-    throw new HttpError(400, 'Un administrateur ne peut pas être créé depuis cet écran');
+  // Une association s'inscrit elle-même : ses informations sont à valider.
+  if (actor.permission_role === 'association') {
+    throw new HttpError(400, 'Une association s’inscrit elle-même depuis l’application');
   }
 
   const [taken] = await query('SELECT id FROM users WHERE email = ?', [data.email]);
@@ -292,7 +293,7 @@ adminRouter.post('/users', async (req, res) => {
         last_name: data.last_name,
         email: data.email,
         firebase_uid: firebaseUid,
-        password_hash: await bcrypt.hash(data.password, 10),
+        password_hash: await bcrypt.hash(data.password, BCRYPT_ROUNDS),
         role: actor.permission_role,
         actor_id: actor.id,
         phone: data.phone ?? null,
@@ -361,9 +362,13 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
   }
 
   await transaction(async (conn) => {
+    // Suspension : les jetons déjà délivrés ne resserviront pas après une
+    // réactivation (token_version augmentée).
     const [result] = await conn.query(
-      'UPDATE users SET status = ?, status_reason = ? WHERE id = ? AND role <> ?',
-      [data.status, data.status === 'active' ? null : data.reason, userId, 'admin'],
+      `UPDATE users SET status = ?, status_reason = ?,
+         token_version = token_version + IF(? = 'suspended', 1, 0)
+       WHERE id = ? AND role <> ?`,
+      [data.status, data.status === 'active' ? null : data.reason, data.status, userId, 'admin'],
     );
     if (result.affectedRows === 0) throw notFound('Compte');
     if (data.status === 'suspended') await cancelOpenReservations(conn, userId);

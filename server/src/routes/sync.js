@@ -55,6 +55,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
   const isDonor = req.user.role !== 'admin';
   const isAdmin = req.user.role === 'admin';
 
+  // Tout part en parallèle : chaque aller-retour vers MySQL compte (tunnel SSH).
   const [
     profile,
     categories,
@@ -67,13 +68,11 @@ syncRouter.get('/', authenticate, async (req, res) => {
     directMessages,
     dashboard,
     platformImpact,
+    offerInsights,
+    admin,
   ] = await Promise.all([
     loadProfile(userId),
-    query(
-      `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
-       FROM categories c LEFT JOIN impact_factors f ON f.category_id = c.id
-       ORDER BY c.name`,
-    ),
+    query(CATEGORIES_SQL),
     query(
       `${OFFER_SELECT} WHERE ${OFFER_AVAILABLE} ORDER BY o.expiry_date ASC LIMIT ?`,
       [MAX_OFFERS],
@@ -101,39 +100,10 @@ syncRouter.get('/', authenticate, async (req, res) => {
     isAdmin ? [] : loadDirectMessages(userId),
     buildDashboard(userId),
     publicImpact(),
+    // Risque de gaspillage de ses offres en cours (écran « Mes offres » hors ligne).
+    isDonor ? donorInsights(userId) : [],
+    isAdmin ? loadAdminSnapshot(req.user) : null,
   ]);
-  // Risque de gaspillage de ses offres en cours (écran « Mes offres » hors ligne).
-  const offerInsights = isDonor ? await donorInsights(userId) : [];
-
-  const admin = isAdmin
-    ? {
-        // Offres visibles, que l'administrateur peut retirer en cas d'abus.
-        moderation_offers: await query(
-          `${OFFER_SELECT} WHERE o.status IN ('published', 'reserved') ORDER BY o.created_at DESC LIMIT ?`,
-          [MAX_OFFERS],
-        ),
-        actors: await query(
-          `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
-           FROM actors a ORDER BY a.sort_order, a.label`,
-        ),
-        factors: await query(
-          `SELECT f.*, c.name AS category_name FROM impact_factors f
-           JOIN categories c ON c.id = f.category_id ORDER BY c.name`,
-        ),
-        settings: await loadSettings(),
-        // Comptes, gardés sur l'appareil : gestion des utilisateurs hors ligne.
-        users: await query(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [MAX_USERS]),
-        // Réservations de toute la plateforme (sans code de retrait), impact
-        // global et compteurs : écrans Réservations, Impact et Administration.
-        reservations: (
-          await query(`${RESERVATION_SELECT} ORDER BY r.created_at DESC LIMIT ?`, [
-            MAX_ADMIN_RESERVATIONS,
-          ])
-        ).map((row) => forViewer(row, req.user)),
-        impact_global: await buildGlobalImpact(),
-        stats: await loadStats(),
-      }
-    : null;
 
   res.json({
     server_time: new Date().toISOString(),
@@ -160,3 +130,41 @@ syncRouter.get('/', authenticate, async (req, res) => {
     admin,
   });
 });
+
+/** Données d'administration, gardées sur l'appareil de l'administrateur. */
+async function loadAdminSnapshot(viewer) {
+  const [moderationOffers, actors, factors, settings, users, reservations, impactGlobal, stats] =
+    await Promise.all([
+      // Offres visibles, que l'administrateur peut retirer en cas d'abus.
+      query(
+        `${OFFER_SELECT} WHERE o.status IN ('published', 'reserved') ORDER BY o.created_at DESC LIMIT ?`,
+        [MAX_OFFERS],
+      ),
+      query(
+        `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
+         FROM actors a ORDER BY a.sort_order, a.label`,
+      ),
+      query(
+        `SELECT f.*, c.name AS category_name FROM impact_factors f
+         JOIN categories c ON c.id = f.category_id ORDER BY c.name`,
+      ),
+      loadSettings(),
+      // Comptes, gardés sur l'appareil : gestion des utilisateurs hors ligne.
+      query(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [MAX_USERS]),
+      // Réservations de toute la plateforme (sans code de retrait), impact
+      // global et compteurs : écrans Réservations, Impact et Administration.
+      query(`${RESERVATION_SELECT} ORDER BY r.created_at DESC LIMIT ?`, [MAX_ADMIN_RESERVATIONS]),
+      buildGlobalImpact(),
+      loadStats(),
+    ]);
+  return {
+    moderation_offers: moderationOffers,
+    actors,
+    factors,
+    settings,
+    users,
+    reservations: reservations.map((row) => forViewer(row, viewer)),
+    impact_global: impactGlobal,
+    stats,
+  };
+}
