@@ -10,11 +10,13 @@ import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/offline/outbox.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
+import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/features/admin/data/admin_repository.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/data/firebase_auth_gateway.dart';
+import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 
 import 'helpers.dart';
 
@@ -63,7 +65,7 @@ final implementedScreens = {
   AppRoutes.splash: 'Commencer',
   AppRoutes.login: 'Se connecter',
   AppRoutes.register: 'Choisissez votre rôle',
-  AppRoutes.home: 'Publier une offre',
+  AppRoutes.home: 'Voir les offres autour de vous',
   AppRoutes.pickup('1'): 'Valider le retrait',
 };
 
@@ -99,6 +101,44 @@ Future<void> pumpRoute(
   await tester.pumpAndSettle();
 }
 
+/// Tous les écrans déclarés (titre, chemin) : chacun doit s'ouvrir.
+final allRoutes = <(String, String)>[
+  ('Démarrage', AppRoutes.splash),
+  ('Accueil', AppRoutes.home),
+  ('Offres disponibles', AppRoutes.search),
+  ('Filtres', AppRoutes.filters),
+  ('Mode hors ligne', AppRoutes.offline),
+  ('Point de départ', AppRoutes.pickLocation),
+  ('Connexion', AppRoutes.login),
+  ('Inscription', AppRoutes.register),
+  ('Activation du compte', AppRoutes.verifyEmail),
+  ('Mot de passe oublié', AppRoutes.forgotPassword),
+  ('Profil', AppRoutes.profile),
+  ('Offres à proximité', AppRoutes.nearbyMap),
+  ('Publier une offre', AppRoutes.createOffer),
+  ('Mes offres', AppRoutes.myOffers),
+  ("Détail de l'offre", AppRoutes.offer('1')),
+  ('Recommandations', AppRoutes.recommendations),
+  ('Réserver', AppRoutes.reserve(1)),
+  ('Mes réservations', AppRoutes.myReservations),
+  ('Confirmation de réservation', AppRoutes.confirmation('1')),
+  ('Retrait', AppRoutes.pickup('1')),
+  ('Notifications', AppRoutes.notifications),
+  ('Messages', AppRoutes.messages),
+  ('Équipe Partage+', AppRoutes.teamMessages),
+  ('Mon impact', AppRoutes.impact),
+  ('Facteurs d’impact', AppRoutes.adminFactors),
+  ('Tableau de bord', AppRoutes.adminDashboard),
+  ('Administration', AppRoutes.adminManage),
+  ('Réservations de la plateforme', AppRoutes.adminReservations),
+  ('Impact de la plateforme', AppRoutes.adminImpact),
+  ('Modération des offres', AppRoutes.adminOffers),
+  ('Gestion des utilisateurs', AppRoutes.adminAccounts),
+  ('Catégories', AppRoutes.adminCategories),
+  ('Acteurs', AppRoutes.adminActors),
+  ('Paramètres', AppRoutes.adminSettings),
+];
+
 void main() {
   testWidgets("L'application démarre sur l'écran d'accueil", (tester) async {
     final overrides = await tester.runAsync(testOverrides);
@@ -123,16 +163,14 @@ void main() {
     expect(find.textContaining('Hors ligne'), findsOneWidget);
   });
 
-  for (final entry in allRouteEntries) {
-    testWidgets('La route ${entry.location} affiche « ${entry.title} »', (
-      tester,
-    ) async {
-      await pumpRoute(tester, entry.location);
+  for (final (title, location) in allRoutes) {
+    testWidgets('La route $location affiche « $title »', (tester) async {
+      await pumpRoute(tester, location);
 
-      final expected = implementedScreens[entry.location];
+      final expected = implementedScreens[location];
       expect(
         expected == null
-            ? find.widgetWithText(AppBar, entry.title)
+            ? find.widgetWithText(AppBar, title)
             : find.text(expected),
         findsWidgets,
       );
@@ -276,7 +314,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final drawer = find.byType(Drawer);
-    for (final item in guestMenuItems) {
+    for (final item in guestMenu.expand((section) => section.items)) {
       expect(
         find.descendant(of: drawer, matching: find.text(item.title)),
         findsOneWidget,
@@ -291,34 +329,139 @@ void main() {
       findsNothing,
     );
     expect(find.text('/home'), findsNothing);
-
-    // Mode debug : liste de tous les écrans, repliée, en bas du menu.
-    final debug = find.text('Développement : tous les écrans');
-    await tester.scrollUntilVisible(
-      debug,
-      200,
-      scrollable: find
-          .descendant(of: drawer, matching: find.byType(Scrollable))
-          .first,
-    );
-    await tester.tap(debug);
-    await tester.pumpAndSettle();
-    final group = find.text(MenuGroup.home.title).last;
-    await tester.ensureVisible(group);
-    await tester.pumpAndSettle();
-    await tester.tap(group);
-    await tester.pumpAndSettle();
-    expect(find.text('/home'), findsOneWidget);
+    // Plus d'outil de développement dans le menu.
+    expect(find.text('Développement : tous les écrans'), findsNothing);
   });
 
-  test('menu selon le rôle', () {
-    expect(menuItemsFor(loggedIn: false), guestMenuItems);
-    expect(menuItemsFor(loggedIn: true, role: 'beneficiary'), userMenuItems);
-    expect(menuItemsFor(loggedIn: true, role: 'admin'), adminMenuItems);
-    expect(
-      userMenuItems.map((item) => item.location),
-      isNot(contains(AppRoutes.login)),
+  testWidgets('mot de passe : bouton Effacer dès que le champ est rempli', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    final changes = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PasswordField(controller: controller, onChanged: changes.add),
+        ),
+      ),
     );
+
+    expect(find.byTooltip('Effacer'), findsNothing);
+    await tester.enterText(find.byType(TextFormField), 'secret123');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Effacer'));
+    await tester.pump();
+
+    expect(controller.text, isEmpty);
+    expect(changes.last, isEmpty);
+    expect(find.byTooltip('Effacer'), findsNothing);
+  });
+
+  test('menu selon le rôle et l’acteur', () {
+    expect(menuFor(loggedIn: false), guestMenu);
+    expect(menuFor(loggedIn: true, role: 'admin'), adminMenu);
+    expect(
+      menuFor(loggedIn: true, role: 'beneficiary', actorCode: 'particulier'),
+      particulierMenu,
+    );
+    expect(
+      menuFor(loggedIn: true, role: 'donor', actorCode: 'commercant'),
+      commercantMenu,
+    );
+    expect(
+      menuFor(loggedIn: true, role: 'donor', actorCode: 'restaurateur'),
+      restaurateurMenu,
+    );
+    expect(
+      menuFor(loggedIn: true, role: 'association', actorCode: 'association'),
+      associationMenu,
+    );
+    // Acteur créé par l'administrateur : menu de ses droits.
+    expect(
+      menuFor(loggedIn: true, role: 'donor', actorCode: 'traiteur'),
+      commercantMenu,
+    );
+    expect(menuFor(loggedIn: true, role: 'beneficiary'), particulierMenu);
+
+    // Couleur du tiroir : mêmes règles que le menu.
+    expect(menuColorFor(loggedIn: false), MenuColors.guest);
+    expect(menuColorFor(loggedIn: true, role: 'admin'), MenuColors.admin);
+    expect(
+      menuColorFor(loggedIn: true, role: 'donor', actorCode: 'restaurateur'),
+      MenuColors.restaurateur,
+    );
+    expect(
+      menuColorFor(loggedIn: true, role: 'donor', actorCode: 'traiteur'),
+      MenuColors.commercant,
+    );
+    expect(
+      menuColorFor(loggedIn: true, role: 'association'),
+      MenuColors.association,
+    );
+    expect(menuColorFor(loggedIn: true), MenuColors.particulier);
+
+    // Aucun écran d'administration ni de connexion dans les menus des acteurs.
+    for (final menu in [
+      particulierMenu,
+      commercantMenu,
+      restaurateurMenu,
+      associationMenu,
+    ]) {
+      final locations = menu.expand((s) => s.items).map((i) => i.location);
+      expect(locations, isNot(contains(AppRoutes.login)));
+      expect(locations.where(AppRoutes.requiresAdmin), isEmpty);
+      expect(locations, contains(AppRoutes.profile));
+    }
+  });
+
+  testWidgets('association : menu accessible depuis les écrans principaux', (
+    tester,
+  ) async {
+    final store = await tester.runAsync(memoryStore);
+    await tester.runAsync(
+      () => store!.saveSnapshot({
+        'profile': {
+          'id': 7,
+          'name': 'Banque alimentaire',
+          'role': 'association',
+          'actor_code': 'association',
+        },
+      }),
+    );
+    final overrides = await tester.runAsync(
+      () => screenOverrides(store: store),
+    );
+
+    for (final location in [
+      AppRoutes.home,
+      AppRoutes.nearbyMap,
+      AppRoutes.myReservations,
+      AppRoutes.impact,
+    ]) {
+      final router = createRouter(initialLocation: location);
+      await tester.pumpWidget(
+        ProviderScope(
+          key: ValueKey(location),
+          overrides: [
+            ...overrides!,
+            initialTokenProvider.overrideWithValue('jeton'),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(DrawerButton));
+      await tester.pumpAndSettle();
+      final drawer = find.byType(Drawer);
+      expect(
+        find.descendant(of: drawer, matching: find.text('Mes collectes')),
+        findsOneWidget,
+        reason: location,
+      );
+      router.dispose();
+    }
   });
 
   testWidgets('écran d’administration refusé à un compte non administrateur', (
@@ -624,12 +767,12 @@ void main() {
           find.byType(CustomScrollView),
           const Offset(0, -200),
         );
+        expect(find.text('250 F CFA'), findsOneWidget);
         await tester.dragUntilVisible(
           find.text('Pains du jour'),
           find.byType(CustomScrollView),
           const Offset(0, -200),
         );
-        expect(find.text('250 F CFA'), findsOneWidget);
         // Rayon illimité par défaut : l'offre lointaine aussi, après les proches.
         await tester.dragUntilVisible(
           find.text('Offre lointaine'),
@@ -688,8 +831,17 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Référence de la transaction'), findsOneWidget);
-        expect(find.text('Téléphone *'), findsOneWidget);
         expect(find.text('À payer : 250 F CFA'), findsOneWidget);
+        await tester.dragUntilVisible(
+          find.text('Téléphone *'),
+          find.byType(ListView),
+          const Offset(0, -200),
+        );
+        await tester.dragUntilVisible(
+          find.byTooltip('Plus'),
+          find.byType(ListView),
+          const Offset(0, 200),
+        );
 
         await tester.tap(find.byTooltip('Plus'));
         await tester.pumpAndSettle();

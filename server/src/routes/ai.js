@@ -14,6 +14,13 @@ import {
   refineRecommendations,
 } from '../services/ai_refine.js';
 import { donorInsights } from '../services/insights.js';
+import {
+  decodeAudio,
+  filterOffers,
+  transcribe,
+  VOICE_LIMITS,
+  VoiceAiError,
+} from '../services/voice_search.js';
 import { buildDraftMessages, DRAFT_LIMITS, parseDraft } from '../services/offer_draft.js';
 import { DISTANCE_KM, OFFER_AVAILABLE, PUBLISHER_TYPE } from '../services/offers.js';
 import { buildDashboard } from './impact.js';
@@ -61,6 +68,12 @@ function checkRate(key) {
 let fetchImpl = null;
 export function setRodiumFetch(fake) {
   fetchImpl = fake;
+}
+
+/** Pour les tests : remplace `fetch` vers l'IA vocale ; `null` : accès réel. */
+let voiceFetch = null;
+export function setVoiceFetch(fake) {
+  voiceFetch = fake;
 }
 
 /** Pour les tests : vide les compteurs d'appels. */
@@ -160,6 +173,108 @@ aiRouter.post('/refine', optionalAuth, async (req, res) => {
     if (error instanceof ModelError) {
       console.warn('IA indisponible :', error.message);
       throw new HttpError(503, 'Service d’IA indisponible', { code: 'ai_unavailable' });
+    }
+    throw error;
+  }
+});
+
+// ---------- Recherche à la voix (IA ouverte) ----------
+
+const voiceSchema = z
+  .object({
+    // Enregistrement « data:audio/…;base64,… » (AAC, WAV, WebM/Opus…).
+    audio: z.string().max(Math.ceil((VOICE_LIMITS.audioBytes * 4) / 3) + 60).optional(),
+    text: text(VOICE_LIMITS.text).optional(),
+    candidates: z
+      .array(
+        z.object({
+          id,
+          distance_km: z.coerce.number().min(0).max(20_000).nullable().optional(),
+        }),
+      )
+      .min(1)
+      .max(VOICE_LIMITS.candidates),
+  })
+  .refine((data) => Boolean(data.audio) || Boolean(data.text), {
+    message: 'Demande vide : parlez ou écrivez ce que vous cherchez',
+    path: ['text'],
+  });
+
+/**
+ * Retranscrit la demande dictée (Whisper) puis ne garde que les offres qui y
+ * répondent (modèle de langage). Les offres sont relues dans MySQL :
+ * l'application n'envoie que des id et des distances.
+ */
+aiRouter.post('/voice-search', optionalAuth, async (req, res) => {
+  const settings = config.voiceAi;
+  if (!settings.apiKey) {
+    throw new HttpError(503, 'IA vocale non configurée sur le serveur', {
+      code: 'voice_ai_not_configured',
+    });
+  }
+  const data = voiceSchema.parse(req.body);
+  const audio = data.audio ? decodeAudio(data.audio) : null;
+  if (data.audio && !audio) {
+    throw new HttpError(400, 'Enregistrement invalide (format audio non reconnu)', {
+      field: 'audio',
+    });
+  }
+  if (audio && audio.buffer.length > VOICE_LIMITS.audioBytes) {
+    throw new HttpError(400, 'Enregistrement trop long', { field: 'audio' });
+  }
+  checkRate(req.user ? `voice:user:${req.user.id}` : `voice:ip:${req.ip}`);
+
+  const ids = [...new Set(data.candidates.map((candidate) => candidate.id))];
+  const distance = new Map(data.candidates.map((c) => [c.id, c.distance_km ?? null]));
+  const offers = await query(
+    `SELECT o.id, o.title, o.description, o.price, o.unit, o.expiry_date,
+            c.name AS category_name, ${PUBLISHER_TYPE} AS publisher_type
+     FROM offers o
+     JOIN categories c ON c.id = o.category_id
+     LEFT JOIN users u ON u.id = o.donor_id
+     LEFT JOIN actors pa ON pa.id = u.actor_id
+     WHERE o.id IN (?) AND ${OFFER_AVAILABLE}`,
+    [ids],
+  );
+  const byId = new Map(offers.map((offer) => [offer.id, offer]));
+  const candidates = ids
+    .filter((offerId) => byId.has(offerId))
+    .map((offerId) => {
+      const offer = byId.get(offerId);
+      return {
+        id: offer.id,
+        titre: offer.title,
+        description: offer.description ? offer.description.slice(0, 160) : undefined,
+        categorie: offer.category_name,
+        prix_fcfa: Number(offer.price ?? 0),
+        unite: offer.unit,
+        date_limite: offer.expiry_date,
+        publieur: offer.publisher_type,
+        distance_km: distance.get(offerId) ?? undefined,
+      };
+    });
+
+  const fetchImpl = voiceFetch ?? fetch;
+  try {
+    const transcript = audio
+      ? await transcribe({ audio, settings, fetchImpl })
+      : data.text;
+    const result =
+      candidates.length === 0
+        ? { keepIds: [], summary: null }
+        : await filterOffers({ request: transcript, candidates, settings, fetchImpl });
+    res.json({
+      transcript,
+      keep_ids: result.keepIds,
+      summary: result.summary,
+      engine: settings.label,
+    });
+  } catch (error) {
+    if (error instanceof VoiceAiError) {
+      console.warn('IA vocale indisponible :', error.message);
+      throw new HttpError(503, 'Service d’IA vocale indisponible', {
+        code: 'voice_ai_unavailable',
+      });
     }
     throw error;
   }

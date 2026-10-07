@@ -34,9 +34,11 @@ const USER_COLUMNS = {
   firebase_uid: 'VARCHAR(128) NULL AFTER password_hash',
   firebase_sync_at: 'DATETIME(3) NULL AFTER firebase_uid',
   firebase_sync_password: 'TINYINT(1) NOT NULL DEFAULT 0 AFTER firebase_sync_at',
+  token_version: 'INT UNSIGNED NOT NULL DEFAULT 0 AFTER firebase_sync_password',
   actor_id: 'INT UNSIGNED NULL AFTER role',
   email_verified_at: 'DATETIME NULL AFTER status_reason',
   preferences: 'JSON NULL AFTER longitude',
+  photo_updated_at: 'DATETIME NULL AFTER preferences',
 };
 
 /** Colonnes ajoutées pour les invités et le paiement hors application. */
@@ -99,6 +101,11 @@ async function upgrade(conn) {
     NOT NULL DEFAULT 'published'`);
   await conn.query("UPDATE offers SET status = 'published' WHERE status = 'pending'");
   await conn.query('ALTER TABLE reservations MODIFY beneficiary_id INT UNSIGNED NULL');
+  // Associations : plus de validation par l'administrateur, actives dès
+  // l'activation du compte.
+  await conn.query(`ALTER TABLE associations MODIFY status
+    ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'approved'`);
+  await conn.query("UPDATE associations SET status = 'approved' WHERE status <> 'approved'");
 
   await conn.query(`ALTER TABLE users
     MODIFY password_hash VARCHAR(255) NULL,

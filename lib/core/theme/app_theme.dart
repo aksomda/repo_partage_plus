@@ -27,6 +27,27 @@ abstract final class AppColors {
   static const accentSoft = Color(0xFFFDEFD9);
 }
 
+/// Fond du menu principal (tiroir, barre latérale) selon l'acteur connecté.
+abstract final class MenuColors {
+  /// Particulier : orange brûlé.
+  static const particulier = Color(0xFFA65300);
+
+  /// Commerçant : vert sapin Partage+.
+  static const commercant = AppColors.primary;
+
+  /// Restaurateur : terracotta.
+  static const restaurateur = Color(0xFFA93F1F);
+
+  /// Association : brun carton.
+  static const association = Color(0xFF7A5230);
+
+  /// Administrateur : vert profond.
+  static const admin = Color(0xFF123D24);
+
+  /// Invité (sans compte) : vert émeraude.
+  static const guest = Color(0xFF0A7F5A);
+}
+
 abstract final class AppTheme {
   static const radius = 12.0;
 

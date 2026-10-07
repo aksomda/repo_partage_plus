@@ -1,21 +1,11 @@
-import jwt from 'jsonwebtoken';
-
-import { config } from '../config.js';
 import { query } from '../db/pool.js';
+import { tokenUserId } from './auth.js';
 import { HttpError } from './errors.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const KEY_FORMAT = /^[\w-]{8,64}$/;
-
-function userIdOf(req) {
-  const header = req.get('authorization') ?? '';
-  if (!header.startsWith('Bearer ')) return 0;
-  try {
-    return Number(jwt.verify(header.slice(7), config.jwt.secret).sub);
-  } catch {
-    return 0;
-  }
-}
+// 16 caractères minimum : sans compte, toutes les clés partagent le même
+// espace, une clé courte se devinerait (et rejouerait la réponse d'un autre).
+const KEY_FORMAT = /^[\w-]{16,64}$/;
 
 /**
  * Si la requête porte un en-tête Idempotency-Key déjà vu, renvoie la réponse
@@ -27,7 +17,7 @@ export async function idempotency(req, res, next) {
   if (!key || !MUTATING.has(req.method)) return next();
   if (!KEY_FORMAT.test(key)) throw new HttpError(400, 'Idempotency-Key invalide');
 
-  const userId = userIdOf(req);
+  const userId = tokenUserId(req);
   const path = req.originalUrl.slice(0, 255);
   const [existing] = await query(
     'SELECT * FROM idempotency_keys WHERE idem_key = ? AND user_id = ?',

@@ -36,7 +36,7 @@ Mot de passe de tous les comptes : `Demo1234!`
 |---|---|---|---|
 | 0:00 | P3 | Contexte : gaspillage alimentaire, principe de l'app | — |
 | 1:00 | P2 | Donateur : publier « Pain du soir » (DLC demain, retrait dans 1 h) | Publication d'offre |
-| 2:00 | P2 | Admin : **modérer** l'offre (valider), montrer la validation d'`Entraide Quartier`, la liste des **catégories** et **facteurs** | Modération, associations, catégories, facteurs |
+| 2:00 | P2 | Admin : **modérer** l'offre (valider), la liste des **catégories** et **facteurs** | Modération, catégories, facteurs |
 | 4:00 | P1 | Bénéficiaire : carte des **offres à proximité**, ouvrir « Pain du soir », réserver 2 pièces | Offres à proximité |
 | 5:00 | P2 | Donateur : **confirmer** la réservation | Confirmation de réservation |
 | 5:30 | P1 | Notification « Réservation confirmée » + code de retrait | Notifications |

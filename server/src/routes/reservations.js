@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { pool, query, transaction } from '../db/pool.js';
 import { authenticate, optionalAuth } from '../http/auth.js';
 import { HttpError, notFound } from '../http/errors.js';
+import { WindowCounter } from '../http/rate_limit.js';
 import { id, idParam } from '../http/validation.js';
 import {
   guestName,
@@ -136,8 +137,8 @@ async function completeOfferIfDone(conn, offerId) {
   );
 }
 
-// Réserver une offre publiée par un compte, avec ou sans compte (association :
-// validée seulement). L'offre d'un invité ne se réserve pas : on l'appelle.
+// Réserver une offre publiée par un compte, avec ou sans compte (association
+// comprise, dès l'activation). L'offre d'un invité ne se réserve pas : on l'appelle.
 reservationsRouter.post('/', optionalAuth, async (req, res) => {
   const data = createSchema.parse(req.body);
   const guest = req.user ? null : guestReservationSchema.parse(req.body).guest;
@@ -145,14 +146,6 @@ reservationsRouter.post('/', optionalAuth, async (req, res) => {
 
   if (req.user?.role === 'admin') {
     throw new HttpError(403, 'Un administrateur ne réserve pas d’offres');
-  }
-  if (req.user?.role === 'association') {
-    const [association] = await query('SELECT status FROM associations WHERE user_id = ?', [
-      req.user.id,
-    ]);
-    if (association?.status !== 'approved') {
-      throw new HttpError(403, 'Association pas encore validée par un administrateur');
-    }
   }
 
   const { reservationId, guestToken } = await transaction(async (conn) => {
@@ -383,6 +376,13 @@ export function actionTime(req, now = new Date()) {
   return new Date(Math.min(now.getTime(), Math.max(earliest, given.getTime())));
 }
 
+/**
+ * Codes de retrait faux tolérés par réservation (sur 15 min) : le code à
+ * 6 chiffres ne peut pas être trouvé par essais successifs.
+ */
+export const MAX_PICKUP_FAILURES = 5;
+const pickupFailures = new WindowCounter({ max: MAX_PICKUP_FAILURES, windowMs: 15 * 60_000 });
+
 const formatSlot = (date) =>
   new Date(date).toLocaleString('fr-FR', {
     day: '2-digit',
@@ -405,9 +405,16 @@ reservationsRouter.post('/:id/pickup', authenticate, async (req, res) => {
     if (reservation.status !== 'confirmed') {
       throw new HttpError(409, 'La réservation doit être confirmée avant le retrait');
     }
+    if (pickupFailures.peek(reservation.id).blocked) {
+      throw new HttpError(429, 'Trop de codes incorrects : réessayez dans 15 minutes', {
+        code: 'pickup_locked',
+      });
+    }
     if (reservation.pickup_code !== pickupCode) {
+      pickupFailures.hit(reservation.id);
       throw new HttpError(400, 'Code de retrait incorrect');
     }
+    pickupFailures.delete(reservation.id);
     const start = new Date(reservation.pickup_start);
     if (at.getTime() < start.getTime() - PICKUP_EARLY_MS) {
       throw new HttpError(409, `Trop tôt : le créneau de retrait commence le ${formatSlot(start)} (UTC)`, {

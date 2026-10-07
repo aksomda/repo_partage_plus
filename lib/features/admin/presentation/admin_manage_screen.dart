@@ -16,7 +16,6 @@ class AdminManageScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final stats = ref.watch(adminStatsProvider);
-    final pendingAssociations = ref.watch(pendingAssociationsProvider).length;
     final moderationOffers = ref.watch(moderationOffersProvider).length;
     final actors = ref.watch(actorsProvider).length;
     final factors = ref.watch(factorsProvider).length;
@@ -34,14 +33,6 @@ class AdminManageScreen extends ConsumerWidget {
         count(actors, 'acteur', 'acteurs'),
         AppRoutes.adminActors,
         false,
-      ),
-      (
-        Icons.verified_outlined,
-        'Validation des associations',
-        'Associations en attente de vérification',
-        count(pendingAssociations, 'en attente', 'en attente'),
-        AppRoutes.adminAssociations,
-        pendingAssociations > 0,
       ),
       (
         Icons.inventory_2_outlined,

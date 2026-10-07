@@ -96,7 +96,7 @@ export async function seed({ fresh = false } = {}) {
     await conn.query(
       `INSERT INTO associations (user_id, name, registration_number, address, status, reviewed_by, reviewed_at)
        VALUES (?, 'Solidarité Plus', 'ASSO-2026-001', 'Quartier centre', 'approved', ?, NOW()),
-              (?, 'Entraide Quartier', 'ASSO-2026-002', 'Quartier nord', 'pending', NULL, NULL)`,
+              (?, 'Entraide Quartier', 'ASSO-2026-002', 'Quartier nord', 'approved', NULL, NULL)`,
       [
         userIds['association@demo.local'],
         userIds['admin@demo.local'],

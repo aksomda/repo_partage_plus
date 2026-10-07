@@ -18,7 +18,8 @@ import { firebaseApp } from './firebase.js';
 /**
  * Tables copiées, avec les colonnes à ne jamais sortir de MySQL.
  * Non copiées : email_otps, guest_tokens (secrets), idempotency_keys
- * (technique), offer_photos et message_photos (images trop lourdes pour Firestore).
+ * (technique), offer_photos, message_photos et direct_message_photos (images
+ * trop lourdes pour Firestore).
  */
 export const MIRRORED_TABLES = {
   actors: {},
@@ -30,6 +31,7 @@ export const MIRRORED_TABLES = {
   reservations: {},
   notifications: {},
   messages: {},
+  direct_messages: {},
 };
 
 /**
@@ -122,10 +124,18 @@ function withoutSecrets(table, rows) {
 async function copyChanged(since) {
   const [{ now }] = await query('SELECT NOW() AS now');
   const counts = {};
-  for (const table of Object.keys(MIRRORED_TABLES)) {
-    const rows = since
-      ? await query(`SELECT * FROM ${table} WHERE updated_at >= ?`, [since])
-      : await query(`SELECT * FROM ${table}`);
+  // Lectures en parallèle (un aller-retour au lieu d'un par table), écritures
+  // Firestore ensuite, une table après l'autre.
+  const tables = Object.keys(MIRRORED_TABLES);
+  const changed = await Promise.all(
+    tables.map((table) =>
+      since
+        ? query(`SELECT * FROM ${table} WHERE updated_at >= ?`, [since])
+        : query(`SELECT * FROM ${table}`),
+    ),
+  );
+  for (const [index, table] of tables.entries()) {
+    const rows = changed[index];
     if (rows.length > 0) await store.write(table, withoutSecrets(table, rows));
     counts[table] = rows.length;
   }

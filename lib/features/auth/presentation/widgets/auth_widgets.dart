@@ -194,12 +194,15 @@ class FieldSpan extends StatelessWidget {
   Widget build(BuildContext context) => child;
 }
 
-/// Champ mot de passe avec bouton afficher / masquer.
+/// Champ mot de passe avec boutons effacer (dès qu'il est rempli) et
+/// afficher / masquer.
 class PasswordField extends StatefulWidget {
   const PasswordField({
     super.key,
     required this.controller,
     this.hint = 'Votre mot de passe',
+    this.label,
+    this.helper,
     this.validator,
     this.textInputAction,
     this.onSubmitted,
@@ -211,6 +214,10 @@ class PasswordField extends StatefulWidget {
 
   final TextEditingController controller;
   final String hint;
+
+  /// Libellé et aide dans le champ (quand il n'est pas dans un LabeledField).
+  final String? label;
+  final String? helper;
   final FormFieldValidator<String>? validator;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
@@ -227,13 +234,30 @@ class PasswordField extends StatefulWidget {
 
 class _PasswordFieldState extends State<PasswordField> {
   var _obscure = true;
+  FocusNode? _ownFocus;
+
+  FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
+
+  @override
+  void dispose() {
+    _ownFocus?.dispose();
+    super.dispose();
+  }
+
+  /// Vide le champ et y replace le curseur ; prévient comme une saisie
+  /// (revalidation de la confirmation…).
+  void _clear() {
+    widget.controller.clear();
+    widget.onChanged?.call('');
+    _focus.requestFocus();
+  }
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
       key: widget.fieldKey,
       controller: widget.controller,
-      focusNode: widget.focusNode,
+      focusNode: _focus,
       obscureText: _obscure,
       validator: widget.validator,
       textInputAction: widget.textInputAction,
@@ -242,14 +266,32 @@ class _PasswordFieldState extends State<PasswordField> {
       autofillHints: widget.autofillHints,
       decoration: InputDecoration(
         hintText: widget.hint,
-        suffixIcon: IconButton(
-          icon: Icon(
-            _obscure
-                ? Icons.visibility_outlined
-                : Icons.visibility_off_outlined,
-          ),
-          tooltip: _obscure ? 'Afficher' : 'Masquer',
-          onPressed: () => setState(() => _obscure = !_obscure),
+        labelText: widget.label,
+        helperText: widget.helper,
+        helperMaxLines: 2,
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListenableBuilder(
+              listenable: widget.controller,
+              builder: (context, _) => widget.controller.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      tooltip: 'Effacer',
+                      onPressed: _clear,
+                    ),
+            ),
+            IconButton(
+              icon: Icon(
+                _obscure
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
+              tooltip: _obscure ? 'Afficher' : 'Masquer',
+              onPressed: () => setState(() => _obscure = !_obscure),
+            ),
+          ],
         ),
       ),
     );

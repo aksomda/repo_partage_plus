@@ -73,7 +73,8 @@ class OfflineBanner extends ConsumerWidget {
                     ? () => _reconnect(ref)
                     : sync.online
                     ? ref.read(syncControllerProvider.notifier).syncNow
-                    : null,
+                    // Hors ligne : ce qui reste consultable (maquette).
+                    : () => ref.read(routerProvider).push(AppRoutes.offline),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
@@ -97,9 +98,13 @@ class OfflineBanner extends ConsumerWidget {
                               ),
                         ),
                       ),
-                      if (sync.online && !sync.syncing)
+                      if (!sync.syncing)
                         Text(
-                          refused ? 'Se reconnecter' : 'Synchroniser',
+                          refused
+                              ? 'Se reconnecter'
+                              : sync.online
+                              ? 'Synchroniser'
+                              : 'Que faire ?',
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(
                                 color: foreground,

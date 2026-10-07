@@ -6,6 +6,7 @@ import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/offline/pending_action.dart';
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
+import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 
 /// Préférences du compte (`users.preferences`), modifications pas encore
@@ -32,12 +33,36 @@ final searchAlertsEnabledProvider = Provider<bool>(
 );
 
 /// Modifications du profil : mises en file (hors ligne compris), sauf le
-/// changement de mot de passe qui exige le réseau.
+/// changement de mot de passe et la photo de profil, qui exigent le réseau.
 class ProfileRepository {
-  ProfileRepository(this._sync, this._dio);
+  ProfileRepository(this._sync, this._dio, this._store, this._setToken);
 
   final SyncController _sync;
   final Dio _dio;
+  final LocalStore _store;
+
+  /// Remplace le jeton de la session en cours.
+  final void Function(String token) _setToken;
+
+  /// Ajoute ou remplace la photo de profil (`data:image/jpeg;base64,…`) ;
+  /// null la retire. La copie locale du profil suit tout de suite.
+  Future<void> setPhoto(String? dataUrl) async {
+    try {
+      final response = dataUrl == null
+          ? await _dio.delete<Map<String, dynamic>>(ApiEndpoints.myPhoto)
+          : await _dio.put<Map<String, dynamic>>(
+              ApiEndpoints.myPhoto,
+              data: {'photo': dataUrl},
+            );
+      await _store.patchSnapshot('profile', {
+        'photo_path': response.data?['photo_path'],
+        'photo_updated_at': response.data?['photo_updated_at'],
+      });
+    } on DioException catch (error) {
+      if (error.response == null) throw ApiException.unreachable();
+      throw ApiException.fromDio(error);
+    }
+  }
 
   Future<SubmitResult> update({
     String? firstName,
@@ -82,10 +107,17 @@ class ProfileRepository {
     required String next,
   }) async {
     try {
-      await _dio.put<void>(
+      final response = await _dio.put<Map<String, dynamic>>(
         ApiEndpoints.changePassword,
         data: {'current_password': current, 'new_password': next},
       );
+      // Les autres sessions du compte sont révoquées par le serveur ; celle-ci
+      // continue avec le nouveau jeton.
+      final token = response.data?['token'];
+      if (token is String) {
+        await _store.saveToken(token);
+        _setToken(token);
+      }
     } on DioException catch (error) {
       if (error.response == null) throw ApiException.unreachable();
       throw ApiException.fromDio(error);
@@ -97,5 +129,7 @@ final profileRepositoryProvider = Provider<ProfileRepository>(
   (ref) => ProfileRepository(
     ref.read(syncControllerProvider.notifier),
     ref.read(dioProvider),
+    ref.read(localStoreProvider),
+    (token) => ref.read(authTokenProvider.notifier).set(token),
   ),
 );

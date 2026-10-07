@@ -6,16 +6,34 @@ import 'package:image_picker/image_picker.dart';
 
 import 'package:repo_partage_plus/core/offline/sync_controller.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
+import 'package:repo_partage_plus/core/widgets/profile_avatar.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/notifications/data/chat_repository.dart';
 
 /// Mini chat : fil (notifications et messages) et zone de saisie, avec
 /// images en pièce jointe uniquement. [userId] : conversation ouverte par
-/// un administrateur ; null : celle de l'utilisateur connecté.
+/// un administrateur ; [peerId] : échange avec un autre utilisateur ; sinon
+/// celle de l'utilisateur connecté avec l'administration.
 class ChatView extends ConsumerStatefulWidget {
-  const ChatView({super.key, this.userId});
+  const ChatView({
+    super.key,
+    this.userId,
+    this.messagesOnly = false,
+    this.peerId,
+    this.offerId,
+  });
 
   final int? userId;
+
+  /// Autre utilisateur (publieur ou bénéficiaire) de l'échange.
+  final int? peerId;
+
+  /// Offre dont on parle, jointe aux messages envoyés (fiche détail).
+  final int? offerId;
+
+  /// Échanges avec l'administration seulement, sans les notifications
+  /// (écran « Messages » de l'utilisateur).
+  final bool messagesOnly;
 
   @override
   ConsumerState<ChatView> createState() => _ChatViewState();
@@ -44,7 +62,15 @@ class _ChatViewState extends ConsumerState<ChatView> {
     if (_marking || !mounted) return;
     _marking = true;
     try {
-      await ref.read(chatRepositoryProvider).markRead(userId: widget.userId);
+      final chat = ref.read(chatRepositoryProvider);
+      if (widget.peerId case final peerId?) {
+        await chat.markDirectRead(peerId);
+      } else {
+        await chat.markRead(
+          userId: widget.userId,
+          notifications: !widget.messagesOnly,
+        );
+      }
     } finally {
       _marking = false;
     }
@@ -144,9 +170,15 @@ class _ChatViewState extends ConsumerState<ChatView> {
     _text.clear();
     setState(_photos.clear);
 
-    final result = await ref
-        .read(chatRepositoryProvider)
-        .send(text: text, photos: photos, userId: widget.userId);
+    final chat = ref.read(chatRepositoryProvider);
+    final result = widget.peerId == null
+        ? await chat.send(text: text, photos: photos, userId: widget.userId)
+        : await chat.sendDirect(
+            peerId: widget.peerId!,
+            offerId: widget.offerId,
+            text: text,
+            photos: photos,
+          );
     if (!mounted) return;
     switch (result) {
       case Sent():
@@ -161,17 +193,25 @@ class _ChatViewState extends ConsumerState<ChatView> {
   @override
   Widget build(BuildContext context) {
     final userId = widget.userId;
-    final items = userId == null
-        ? ref.watch(userChatFeedProvider)
+    final peerId = widget.peerId;
+    final items = peerId != null
+        ? ref.watch(directFeedProvider(peerId))
+        : userId == null
+        ? ref.watch(
+            widget.messagesOnly
+                ? userMessagesFeedProvider
+                : userChatFeedProvider,
+          )
         : ref.watch(adminChatFeedProvider(userId));
     // Nouveau message reçu pendant que la conversation est ouverte.
     ref.listen(chatMessagesProvider, (_, _) => _markRead());
+    ref.listen(directMessagesProvider, (_, _) => _markRead());
 
     return Column(
       children: [
         Expanded(
           child: items.isEmpty
-              ? _Empty(admin: userId != null)
+              ? _Empty(admin: userId != null, direct: peerId != null)
               : ListView.builder(
                   reverse: true,
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
@@ -357,15 +397,19 @@ class _Bubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           if (!mine) ...[
-            CircleAvatar(
-              radius: 14,
-              backgroundColor: AppColors.primarySoft,
-              foregroundColor: AppColors.primary,
-              child: Icon(
-                item.system ? Icons.eco_outlined : Icons.support_agent,
-                size: 16,
+            // Autre utilisateur : ses initiales ; sinon l'équipe Partage+.
+            if (item.direct)
+              ProfileAvatar(name: item.senderName ?? '?', size: 28)
+            else
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: AppColors.primarySoft,
+                foregroundColor: AppColors.primary,
+                child: Icon(
+                  item.system ? Icons.eco_outlined : Icons.support_agent,
+                  size: 16,
+                ),
               ),
-            ),
             const SizedBox(width: 6),
           ],
           Flexible(
@@ -405,7 +449,11 @@ class _Photos extends StatelessWidget {
               dimension: size,
               child: item.localPhotos.isNotEmpty
                   ? _Zoomable(bytes: item.localPhotos[i])
-                  : _RemotePhoto(messageId: item.messageId!, position: i),
+                  : _RemotePhoto(
+                      messageId: item.messageId!,
+                      position: i,
+                      direct: item.direct,
+                    ),
             ),
           ),
       ],
@@ -414,14 +462,21 @@ class _Photos extends StatelessWidget {
 }
 
 class _RemotePhoto extends ConsumerWidget {
-  const _RemotePhoto({required this.messageId, required this.position});
+  const _RemotePhoto({
+    required this.messageId,
+    required this.position,
+    required this.direct,
+  });
 
   final int messageId;
   final int position;
+  final bool direct;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final photo = ref.watch(messagePhotoProvider((messageId, position)));
+    final photo = ref.watch(
+      messagePhotoProvider((messageId, position, direct)),
+    );
     return switch (photo) {
       AsyncData(value: final bytes?) => _Zoomable(bytes: bytes),
       AsyncLoading() => const ColoredBox(
@@ -435,7 +490,7 @@ class _RemotePhoto extends ConsumerWidget {
       ),
       _ => InkWell(
         onTap: () =>
-            ref.invalidate(messagePhotoProvider((messageId, position))),
+            ref.invalidate(messagePhotoProvider((messageId, position, direct))),
         child: const ColoredBox(
           color: AppColors.background,
           child: Center(
@@ -603,9 +658,10 @@ class _Composer extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.admin});
+  const _Empty({required this.admin, this.direct = false});
 
   final bool admin;
+  final bool direct;
 
   @override
   Widget build(BuildContext context) {
@@ -622,7 +678,10 @@ class _Empty extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              admin
+              direct
+                  ? 'Posez votre question : disponibilité, heure de retrait, '
+                        'accès… Vous pouvez joindre des images.'
+                  : admin
                   ? 'Aucun message. Écrivez le premier.'
                   : 'Vos notifications et vos échanges avec l’équipe '
                         'Partage+ s’afficheront ici.\nUne question ? '

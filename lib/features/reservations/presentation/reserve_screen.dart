@@ -160,7 +160,7 @@ class _ReserveFormState extends ConsumerState<_ReserveForm> {
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  OfferThumbnail(offer: _offer, size: 56),
+                  OfferThumbnail(offer: _offer, size: 64),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -171,8 +171,22 @@ class _ReserveFormState extends ConsumerState<_ReserveForm> {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                         Text(
-                          '${formatPrice(_price)} · ${_offer['donor_name']}',
+                          '${_offer['donor_name'] ?? ''}',
                           style: const TextStyle(color: AppColors.textMuted),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          [
+                            _price == 0 ? 'Don gratuit' : formatPrice(_price),
+                            if (_offer['distance_km'] case final num km)
+                              formatDistance(km),
+                          ].join(' · '),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: _price == 0
+                                ? AppColors.primary
+                                : AppColors.accent,
+                          ),
                         ),
                       ],
                     ),
@@ -183,45 +197,27 @@ class _ReserveFormState extends ConsumerState<_ReserveForm> {
           ),
           const SizedBox(height: 20),
           Text(
-            _choosesSlot ? 'Choisissez votre créneau' : 'Créneau de retrait',
+            _choosesSlot
+                ? 'Choisissez un créneau de retrait'
+                : 'Créneau de retrait',
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           if (_choosesSlot)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final slot in _slots)
-                  ChoiceChip(
-                    label: Text(formatPeriod(slot.start, slot.end)),
-                    selected: _slotId == slot.id,
-                    labelStyle: TextStyle(
-                      color: _slotId == slot.id ? Colors.white : AppColors.text,
-                    ),
-                    // Créneau terminé : plus réservable.
-                    onSelected: slot.end.isAfter(DateTime.now())
-                        ? (_) => setState(() => _slotId = slot.id)
-                        : null,
-                  ),
-              ],
-            )
+            for (final slot in _slots)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _SlotTile(
+                  label: formatPeriod(slot.start, slot.end),
+                  selected: _slotId == slot.id,
+                  // Créneau terminé : plus réservable.
+                  onTap: slot.end.isAfter(DateTime.now())
+                      ? () => setState(() => _slotId = slot.id)
+                      : null,
+                ),
+              )
           else
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.primarySoft,
-                borderRadius: BorderRadius.circular(AppTheme.radius),
-                border: Border.all(color: AppColors.primary),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.check_circle, color: AppColors.primary),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(formatPickup(_offer))),
-                ],
-              ),
-            ),
+            _SlotTile(label: formatPickup(_offer), selected: true),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -323,6 +319,61 @@ class _ReserveFormState extends ConsumerState<_ReserveForm> {
             onPressed: _submit,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Créneau de retrait en ligne à cocher (maquette « Réservation »).
+class _SlotTile extends StatelessWidget {
+  const _SlotTile({required this.label, required this.selected, this.onTap});
+
+  final String label;
+  final bool selected;
+
+  /// null : créneau imposé (seul possible) ou terminé.
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = selected || onTap != null;
+    return Material(
+      color: selected ? AppColors.primarySoft : AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        side: BorderSide(
+          color: selected ? AppColors.primary : AppColors.border,
+          width: selected ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppTheme.radius),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          child: Row(
+            children: [
+              Icon(
+                selected ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: selected
+                    ? AppColors.primary
+                    : enabled
+                    ? AppColors.textMuted
+                    : AppColors.border,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: enabled ? AppColors.text : AppColors.textMuted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

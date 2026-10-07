@@ -14,7 +14,7 @@ en file d'attente. Au retour du réseau, tout est envoyé au serveur, qui accept
 | Voir mes réservations et **mon code de retrait** | ✅ |
 | Confirmer une réservation, valider un retrait (donateur) | ✅ en file ; un code faux revient en « Action refusée ». L'heure réelle du retrait est envoyée (en-tête `X-Action-At`) : le créneau est vérifié à cette heure-là |
 | Publier / modifier / retirer une offre | ✅ en file ; publiée dès l'envoi (l'administrateur retire après coup les abus) |
-| Modérer offres et comptes, valider associations, catégories, facteurs (admin) | ✅ en file |
+| Modérer offres et comptes, catégories, facteurs (admin) | ✅ en file |
 | Rappel de retrait, alerte DLC proche | ✅ programmés sur le téléphone (Android/iOS) |
 | Notifications, impact | ✅ dernière copie ; « lu » enregistré localement |
 | Fond de carte | ✅ zones déjà consultées (cache de tuiles de 300 Mo, servi « hors ligne d'abord ») ; zone jamais vue : cases vides et bandeau, la liste reste disponible. Pas de téléchargement de zones à l'avance : la politique d'usage des tuiles OpenStreetMap interdit le téléchargement en masse |

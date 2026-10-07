@@ -157,41 +157,6 @@ void main() {
     });
   });
 
-  testWidgets('validation des associations : liste, refus avec motif', (
-    tester,
-  ) async {
-    await _pumpWithSnapshot(tester, AppRoutes.adminAssociations, {
-      'admin': {
-        'pending_associations': [
-          {
-            'id': 3,
-            'name': 'Entraide Quartier',
-            'registration_number': 'BF-2026-12',
-            'user_name': 'Moussa Kaboré',
-            'email': 'entraide@test.local',
-            'created_at': '2026-10-01T10:00:00Z',
-          },
-        ],
-      },
-    });
-
-    expect(find.text('Entraide Quartier'), findsOneWidget);
-    expect(find.textContaining('BF-2026-12'), findsOneWidget);
-
-    await tester.tap(find.text('Refuser'));
-    await tester.pumpAndSettle();
-    expect(find.text('Refuser « Entraide Quartier » ?'), findsOneWidget);
-    await tester.tap(find.widgetWithText(FilledButton, 'Refuser'));
-    await tester.pumpAndSettle();
-    expect(find.text('Motif obligatoire'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextFormField), 'Numéro introuvable');
-    await tester.tap(find.widgetWithText(FilledButton, 'Refuser'));
-    await tester.pumpAndSettle();
-    // Hors ligne : décision mise en file, l'association disparaît de la liste.
-    expect(find.text('Entraide Quartier'), findsNothing);
-  });
-
   testWidgets('facteurs d’impact : catégories avec et sans facteur', (
     tester,
   ) async {
@@ -236,8 +201,12 @@ void main() {
     expect(find.text('Awa Ouédraogo'), findsOneWidget);
     expect(find.text('Particulier'), findsOneWidget);
     expect(find.text('Mes informations'), findsOneWidget);
-    expect(find.text('Changer mon mot de passe'), findsOneWidget);
     expect(find.text('Mes préférences'), findsOneWidget);
+    expect(find.text('Modifier le profil'), findsOneWidget);
+
+    await tester.tap(find.text('Paramètres'));
+    await tester.pumpAndSettle();
+    expect(find.text('Changer mon mot de passe'), findsOneWidget);
     final switches = tester
         .widgetList<SwitchListTile>(find.byType(SwitchListTile))
         .toList();

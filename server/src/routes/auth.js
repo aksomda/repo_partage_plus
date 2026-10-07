@@ -51,6 +51,9 @@ const registerSchema = z.object({
     .trim()
     .regex(/^\+?[0-9 ]{8,20}$/, 'Numéro de téléphone invalide'),
   actor_id: id,
+  // Jeton push du téléphone qui s'inscrit : il reçoit aussi le code d'activation.
+  device_token: z.string().trim().min(20).max(255).optional(),
+  device_platform: z.enum(['android', 'ios']).optional(),
   latitude: latitude.optional(),
   longitude: longitude.optional(),
   association: z
@@ -76,21 +79,28 @@ export function publicUser(row) {
     password_hash: _passwordHash,
     firebase_sync_at: _syncAt,
     firebase_sync_password: _syncPassword,
+    token_version: _tokenVersion,
     ...user
   } = row;
+  // Chemin de la photo de profil, relatif à l'URL de l'API (null : initiales).
+  // Le paramètre `v` change à chaque nouvelle photo, pour les caches.
+  const updated = user.photo_updated_at ? new Date(user.photo_updated_at).getTime() : null;
+  user.photo_path = updated ? `/users/${user.id}/photo?v=${Math.floor(updated / 1000)}` : null;
   return user;
 }
 
 export async function loadProfile(userId) {
-  const [user] = await query(
-    `SELECT u.*, a.code AS actor_code, a.label AS actor_label
-     FROM users u LEFT JOIN actors a ON a.id = u.actor_id WHERE u.id = ?`,
-    [userId],
-  );
-  const [association] = await query(
-    'SELECT id, name, registration_number, address, status, review_reason, reviewed_at FROM associations WHERE user_id = ?',
-    [userId],
-  );
+  const [[user], [association]] = await Promise.all([
+    query(
+      `SELECT u.*, a.code AS actor_code, a.label AS actor_label
+       FROM users u LEFT JOIN actors a ON a.id = u.actor_id WHERE u.id = ?`,
+      [userId],
+    ),
+    query(
+      'SELECT id, name, registration_number, address, status, review_reason, reviewed_at FROM associations WHERE user_id = ?',
+      [userId],
+    ),
+  ]);
   return { ...publicUser(user), association: association ?? null };
 }
 
@@ -110,9 +120,24 @@ function assertCanLogin(row) {
   }
 }
 
+/** Coût du hachage des mots de passe (bcrypt). */
+export const BCRYPT_ROUNDS = 10;
+
+/**
+ * Haché comparé quand le compte n'existe pas : la réponse prend le même
+ * temps, et ne révèle donc pas si l'adresse a un compte.
+ */
+const DUMMY_HASH = bcrypt.hashSync('compte-inexistant', BCRYPT_ROUNDS);
+
+/** Nouveau jeton de session pour le compte (version des sessions actuelle). */
+export async function issueToken(userId) {
+  const [row] = await query('SELECT id, role, token_version FROM users WHERE id = ?', [userId]);
+  return signToken(row);
+}
+
 async function session(res, userId) {
   const user = await loadProfile(userId);
-  res.json({ token: signToken(user), user });
+  res.json({ token: await issueToken(userId), user });
 }
 
 authRouter.post('/register', async (req, res) => {
@@ -121,7 +146,7 @@ authRouter.post('/register', async (req, res) => {
     ? await firebase.verifyIdToken(data.id_token)
     : { uid: null, email: data.email };
   if (!identity.email) throw new HttpError(400, 'Le compte Firebase n’a pas d’adresse e-mail');
-  const passwordHash = data.password ? await bcrypt.hash(data.password, 10) : null;
+  const passwordHash = data.password ? await bcrypt.hash(data.password, BCRYPT_ROUNDS) : null;
 
   const [actor] = await query('SELECT * FROM actors WHERE id = ?', [data.actor_id]);
   if (!actor || !actor.active || !actor.self_signup) {
@@ -192,6 +217,17 @@ authRouter.post('/register', async (req, res) => {
           data.association.registration_number ?? null,
           data.association.address ?? null,
         ],
+      );
+    }
+
+    // Seul l'appareil de l'inscription est lié au compte en attente : un
+    // « renvoyer le code » ne peut pas en ajouter un autre.
+    if (data.device_token) {
+      await conn.query('DELETE FROM device_tokens WHERE user_id = ?', [newId]);
+      await conn.query(
+        `INSERT INTO device_tokens (token, user_id, platform) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), platform = VALUES(platform)`,
+        [data.device_token, newId, data.device_platform ?? null],
       );
     }
 
@@ -277,8 +313,10 @@ authRouter.post('/password/reset', async (req, res) => {
 
   // Hors transaction : un essai raté doit rester compté.
   await consumeCode(pool, row.id, data.code, 'password_reset');
-  await query('UPDATE users SET password_hash = ? WHERE id = ?', [
-    await bcrypt.hash(data.password, 10),
+  // Les sessions ouvertes (peut-être par la personne qui connaissait
+  // l'ancien mot de passe) sont révoquées.
+  await query('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?', [
+    await bcrypt.hash(data.password, BCRYPT_ROUNDS),
     row.id,
   ]);
   if (!(await firebase.setPassword(row.firebase_uid, data.password))) {
@@ -357,7 +395,7 @@ async function rememberPassword(row, password) {
   if (!password || row.firebase_sync_password) return;
   if (row.password_hash && (await bcrypt.compare(password, row.password_hash))) return;
   await query('UPDATE users SET password_hash = ? WHERE id = ?', [
-    await bcrypt.hash(password, 10),
+    await bcrypt.hash(password, BCRYPT_ROUNDS),
     row.id,
   ]);
 }
@@ -371,11 +409,9 @@ authRouter.post('/login', async (req, res) => {
   assertLoginAllowed(req.ip, data.email);
   const [row] = await query('SELECT * FROM users WHERE email = ?', [data.email]);
 
-  if (
-    !row ||
-    !row.password_hash ||
-    !(await bcrypt.compare(data.password, row.password_hash))
-  ) {
+  // Toujours une comparaison bcrypt, même sans compte : même temps de réponse.
+  const matches = await bcrypt.compare(data.password, row?.password_hash ?? DUMMY_HASH);
+  if (!row?.password_hash || !matches) {
     recordLoginFailure(req.ip, data.email);
     throw new HttpError(401, 'Email ou mot de passe incorrect');
   }

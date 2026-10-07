@@ -14,6 +14,7 @@ import 'package:repo_partage_plus/features/discovery/presentation/widgets/discov
 import 'package:repo_partage_plus/features/offers/data/offers_repository.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
 
 /// Écran des réservations adaptatif :
 /// - qui publie (donateur, ou tout compte ayant des offres ou des commandes
@@ -68,7 +69,9 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
       return DefaultTabController(
         length: 2,
         child: Scaffold(
+          drawer: const AppMenu(currentLocation: AppRoutes.myReservations),
           appBar: AppBar(
+            leading: backOrMenuButton(context),
             title: const Text('Commandes & Réservations'),
             bottom: TabBar(
               indicatorColor: AppColors.primary,
@@ -133,7 +136,11 @@ class _MyReservationsScreenState extends ConsumerState<MyReservationsScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mes réservations')),
+      drawer: const AppMenu(currentLocation: AppRoutes.myReservations),
+      appBar: AppBar(
+        leading: backOrMenuButton(context),
+        title: const Text('Mes réservations'),
+      ),
       body: _MyReservationsList(
         accountReservations: accountReservations,
         guestReservations: guestReservations,
@@ -454,6 +461,22 @@ class _ReceivedOrderTileState extends ConsumerState<_ReceivedOrderTile> {
                     ),
                   ),
                   StatusBadge(status),
+                  if (order['beneficiary_id'] case final int beneficiaryId)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: IconButton(
+                        tooltip: 'Écrire à $beneficiaryName',
+                        visualDensity: VisualDensity.compact,
+                        color: AppColors.primary,
+                        icon: const Icon(Icons.chat_bubble_outline),
+                        onPressed: () => context.push(
+                          AppRoutes.directConversation(
+                            beneficiaryId,
+                            offerId: (order['offer_id'] as num?)?.toInt(),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
               const Divider(height: 24),

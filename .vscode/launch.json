@@ -2,11 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      // Téléphone branché en USB : lancer d'abord `adb reverse tcp:3000 tcp:3000`.
+      // Téléphone (USB ou ADB Wi-Fi) : `adb reverse tcp:3000 tcp:3000` est
+      // lancé avant chaque démarrage (tâche « adb reverse API »).
       "name": "Téléphone (USB, API locale)",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
+      "preLaunchTask": "adb reverse API",
       "args": ["--dart-define=API_BASE_URL=http://localhost:3000/api"]
     },
     {
