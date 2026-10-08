@@ -6,21 +6,27 @@ import 'package:repo_partage_plus/core/countries/countries.dart';
 import 'package:repo_partage_plus/core/location/location.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 
-/// Pays de l'utilisateur d'après sa position (point de départ déjà connu,
-/// sinon position actuelle) ; Burkina Faso si elle est inconnue.
+/// Pays de l'utilisateur, du plus précis au plus approximatif : point de
+/// départ déjà connu, position actuelle, puis adresse IP ; Burkina Faso
+/// seulement si rien de tout cela n'aboutit.
 final detectedCountryProvider = FutureProvider<Country>((ref) async {
+  final geocoder = ref.read(geocoderProvider);
   var place = ref.watch(originProvider.select((state) => state.place));
   if (place == null) {
     try {
       place = await ref.read(locationGatewayProvider).currentPosition();
     } catch (_) {
-      return defaultCountry;
+      // Position refusée ou indisponible : on essaie la suite.
     }
   }
-  final code = await ref
-      .read(geocoderProvider)
-      .countryCodeOf(place.lat, place.lng);
-  return countryByCode(code) ?? defaultCountry;
+  if (place != null) {
+    final country = countryByCode(
+      await geocoder.countryCodeOf(place.lat, place.lng),
+    );
+    if (country != null) return country;
+  }
+  // Pas la région de l'appareil : souvent fr_FR en Afrique de l'Ouest.
+  return countryByCode(await geocoder.countryCodeFromIp()) ?? defaultCountry;
 });
 
 /// Numéro de téléphone : pays (drapeau, indicatif) + numéro saisi librement.

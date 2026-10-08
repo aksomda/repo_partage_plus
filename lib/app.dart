@@ -22,7 +22,16 @@ class RepasPartageApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: ref.watch(routerProvider),
-      builder: (context, child) => OfflineBanner(child: child!),
+      builder: (context, child) => OfflineBanner(
+        // Android 15+ affiche l'app sous la barre de navigation système
+        // (bord à bord imposé) : les listes à marge fixe y glissaient leur
+        // fin. On réserve cette zone pour tous les écrans, feuilles et
+        // dialogues ; le blanc prolonge la barre d'onglets.
+        child: ColoredBox(
+          color: AppColors.surface,
+          child: SafeArea(top: false, child: child!),
+        ),
+      ),
     );
   }
 }

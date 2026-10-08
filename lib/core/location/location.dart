@@ -284,6 +284,23 @@ class Geocoder {
       return null;
     }
   }
+
+  /// Code ISO du pays d'après l'adresse IP (sans autorisation de position),
+  /// via country.is (gratuit, sans clé), ou null si inconnu ou hors ligne.
+  Future<String?> countryCodeFromIp() async {
+    try {
+      final response = await Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 8),
+        ),
+      ).get<Map<String, dynamic>>('https://api.country.is/');
+      final code = response.data?['country'];
+      return code is String && code.length == 2 ? code.toUpperCase() : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 final geocoderProvider = Provider<Geocoder>((ref) => Geocoder());

@@ -217,3 +217,43 @@ Open another terminal at the project root:
 flutter pub get
 flutter run              # Android emulator: API is accessible at 1
 ```
+## Capture d'écrans de la version android
+I. PAGE DE DEMARRAGE DE L'APPLICATION
+![alt text](image.png)
+
+II. INTERFACE D'UN USAGER NE DISPOSANT PAS DE COMPTE
+Lorsque l'usager a cliqué sur le bouton "Commencer" alors il est redigé sur cette page.
+![alt text](image-1.png)
+
+Après avoir effectué un choix, alors il peut avoir les fonctionnalités suivantes:
+1. Publier des offres
+2. Rechercher des offres
+3. Effectuer des réservations
+4. Visualiser les offres disponibles à proximité de sa posiiton
+![alt text](image-2.png)
+
+III. Ecran de publication des offres
+
+![alt text](image-3.png) ![![alt text](image-5.png)](image-4.png) ![alt text](image-6.png)
+
+Après avoir publier une offre, l'usager pueut modifier son offre voire le supprimer
+![alt text](image-7.png)
+
+il faut visualiser les détails qui sera visibles par les utilisateurs de Partage+
+![alt text](image-8.png)
+
+III. Ecran de réservation
+1. Liste des réservations
+Cet écran présente la liste des réservations effectuées par l'utilisateur non connecté avec leurs différentes statuts
+![alt text](image-9.png)
+
+Vu que l'utilisateur ne dispose pas de compte certaines fonctionnalités liées à l'impact environnementale
+
+2. Réaliser une réservation
+Pour réaliser une réservation, il faut choisir une offre et cliquer pour les détails
+![alt text](image-10.png)
+
+La confirmation de la réservation est demandée à l'usager avant l'enregistrement
+![alt text](image-11.png)
+
+Pour les usagers ne disposant pas de compte et qui font les réservations alors, leurs réservations sont stockés sur leur téléphone et sur l'application pour le temps de l'exécution.
