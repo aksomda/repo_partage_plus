@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,13 +40,26 @@ class PickupScreen extends ConsumerStatefulWidget {
 
 enum _ValidationMode { manual, qrCode }
 
+/// Le scanner (mobile_scanner) n'existe pas sur Windows ni Linux :
+/// seule la saisie du code à 6 chiffres y est proposée.
+bool get _scannerAvailable =>
+    kIsWeb ||
+    const {
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.macOS,
+    }.contains(defaultTargetPlatform);
+
 class _PickupScreenState extends ConsumerState<PickupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _codeController = TextEditingController();
-  final MobileScannerController _scannerController = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-    facing: CameraFacing.back,
-  );
+  // Créé à la première ouverture du scanner.
+  MobileScannerController? _scanner;
+  MobileScannerController get _scannerController =>
+      _scanner ??= MobileScannerController(
+        detectionSpeed: DetectionSpeed.noDuplicates,
+        facing: CameraFacing.back,
+      );
 
   var _mode = _ValidationMode.manual;
   var _loading = false;
@@ -54,7 +68,7 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
   @override
   void dispose() {
     _codeController.dispose();
-    _scannerController.dispose();
+    _scanner?.dispose();
     super.dispose();
   }
 
@@ -148,32 +162,33 @@ class _PickupScreenState extends ConsumerState<PickupScreen> {
           : Column(
               children: [
                 _HeaderSummary(reservation: reservation),
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
+                if (_scannerAvailable)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: SegmentedButton<_ValidationMode>(
+                      segments: const [
+                        ButtonSegment(
+                          value: _ValidationMode.manual,
+                          label: Text('Code manuel'),
+                          icon: Icon(Icons.pin),
+                        ),
+                        ButtonSegment(
+                          value: _ValidationMode.qrCode,
+                          label: Text('Scanner QR Code'),
+                          icon: Icon(Icons.qr_code_scanner),
+                        ),
+                      ],
+                      selected: {_mode},
+                      onSelectionChanged: (selected) {
+                        setState(() {
+                          _mode = selected.first;
+                        });
+                      },
+                    ),
                   ),
-                  child: SegmentedButton<_ValidationMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: _ValidationMode.manual,
-                        label: Text('Code manuel'),
-                        icon: Icon(Icons.pin),
-                      ),
-                      ButtonSegment(
-                        value: _ValidationMode.qrCode,
-                        label: Text('Scanner QR Code'),
-                        icon: Icon(Icons.qr_code_scanner),
-                      ),
-                    ],
-                    selected: {_mode},
-                    onSelectionChanged: (selected) {
-                      setState(() {
-                        _mode = selected.first;
-                      });
-                    },
-                  ),
-                ),
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 250),

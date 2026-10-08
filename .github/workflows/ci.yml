@@ -91,6 +91,27 @@ jobs:
 
       - run: flutter pub get
 
+      # Signe avec la clé de release si les secrets sont disponibles
+      # (absents sur les PR venant de forks → repli sur la clé debug).
+      - name: Keystore de release
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Secrets de signature absents : APK signé avec la clé debug."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
       - name: Build APK
         run: flutter build apk --release --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
 
@@ -121,3 +142,73 @@ jobs:
         with:
           name: web-release
           path: build/web
+
+  # Vérifie que l'application compile sur les autres plateformes
+  # (aucun artefact publié : voir deploy.yml pour les livrables).
+  build-apple:
+    name: Build ${{ matrix.platform }}
+    needs: lint-test
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, macos]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build iOS (sans signature)
+        if: matrix.platform == 'ios'
+        run: flutter build ios --release --no-codesign --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+
+      - name: Build macOS
+        if: matrix.platform == 'macos'
+        run: flutter build macos --release --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+
+  build-windows:
+    name: Build Windows
+    needs: lint-test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build Windows
+        run: flutter build windows --release --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+
+  build-linux:
+    name: Build Linux
+    needs: lint-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dépendances système
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build Linux
+        run: flutter build linux --release --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}

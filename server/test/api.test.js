@@ -5,6 +5,8 @@ import { after, before, describe, test } from 'node:test';
 // (les valeurs vides empêchent dotenv de reprendre celles du .env).
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? '';
+// DB_SSL=true du .env vise TiDB, pas le MySQL local des tests.
+process.env.DB_SSL = process.env.TEST_DB_SSL ?? 'false';
 process.env.DB_NAME = process.env.TEST_DB_NAME ?? 'repas_partage_test';
 process.env.JOBS_TOKEN = 'jeton-de-test';
 
@@ -15,7 +17,7 @@ const { pool } = await import('../src/db/pool.js');
 const { DEMO_PASSWORD, seed } = await import('../src/db/seed.js');
 const { setFirebaseGateway } = await import('../src/services/firebase.js');
 const { syncFirebaseAccounts } = await import('../src/services/firebase_sync.js');
-const { purgeFirebaseMails, sentMails, setMailStore } = await import(
+const { parseAddress, purgeFirebaseMails, sentMails, setMailFetch, setMailStore } = await import(
   '../src/services/mailer.js'
 );
 const { firestoreMirror, flushFirestoreMirror, setFirestoreStore } = await import(
@@ -1519,6 +1521,68 @@ describe('e-mails envoyés par Firebase (extension Trigger Email)', () => {
     const now = new Date('2026-10-02T12:00:00Z');
     await purgeFirebaseMails(now);
     assert.equal(purgedBefore.toISOString(), '2026-10-01T12:00:00.000Z');
+  });
+});
+
+describe('e-mails envoyés par l’API Brevo', () => {
+  const calls = [];
+  let status = 201;
+
+  before(() => {
+    config.mail.transport = 'brevo';
+    config.brevo.apiKey = 'xkeysib-test';
+    setMailFetch(async (url, options) => {
+      calls.push({ url, headers: options.headers, body: JSON.parse(options.body) });
+      return new Response('{}', { status });
+    });
+  });
+
+  after(() => {
+    config.mail.transport = 'smtp';
+    config.brevo.apiKey = null;
+    setMailFetch(null);
+  });
+
+  const register = async (email) => {
+    const actors = (await api.get('/api/actors')).body;
+    return api.post('/api/auth/register').send({
+      email,
+      password: 'motdepasse1',
+      first_name: 'Awa',
+      last_name: 'Sawadogo',
+      gender: 'female',
+      age: 30,
+      phone: '+226 70 00 00 02',
+      actor_id: actors.find((actor) => actor.code === 'particulier').id,
+    });
+  };
+
+  test('le code d’activation part par l’API HTTPS', async () => {
+    const res = await register('mail.brevo@test.local');
+    assert.equal(res.status, 201, res.text);
+
+    const call = calls.find((item) => item.body.to[0].email === 'mail.brevo@test.local');
+    assert.ok(call, 'aucun appel à Brevo');
+    assert.equal(call.url, 'https://api.brevo.com/v3/smtp/email');
+    assert.equal(call.headers['api-key'], 'xkeysib-test');
+    assert.ok(call.body.sender.email.includes('@'));
+    assert.match(call.body.textContent, /\b\d{6}\b/);
+  });
+
+  test('un refus de Brevo donne un message compréhensible', async () => {
+    status = 401;
+    try {
+      const res = await register('mail.brevo.refus@test.local');
+      assert.equal(res.status, 503);
+      assert.match(res.body.error, /pas pu être envoyé/);
+    } finally {
+      status = 201;
+    }
+  });
+
+  test('adresse « Nom <e-mail> » découpée pour Brevo', () => {
+    assert.deepEqual(parseAddress('Partage+ <a@b.fr>'), { name: 'Partage+', email: 'a@b.fr' });
+    assert.deepEqual(parseAddress('a@b.fr'), { email: 'a@b.fr' });
   });
 });
 

@@ -17,10 +17,12 @@ services:
         value: production
       - key: NODE_VERSION
         value: '22'
+      # TiDB Cloud Serverless : mysql://USER.root:MOT_DE_PASSE@HOTE:4000/repas_partage
       - key: DATABASE_URL
         sync: false
+      # TiDB impose TLS.
       - key: DB_SSL
-        value: 'false'
+        value: 'true'
       - key: JWT_SECRET
         generateValue: true
       - key: JOBS_TOKEN
@@ -32,6 +34,12 @@ services:
       - key: FIREBASE_PROJECT_ID
         sync: false
       - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+      # L'offre gratuite de Render bloque les ports SMTP (25, 465, 587) :
+      # e-mails envoyés par l'API HTTPS de Brevo.
+      - key: MAIL_TRANSPORT
+        value: brevo
+      - key: BREVO_API_KEY
         sync: false
       - key: SMTP_HOST
         sync: false

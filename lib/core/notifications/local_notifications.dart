@@ -11,10 +11,13 @@ import 'package:repo_partage_plus/core/notifications/reminder_planner.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/features/favorites/data/favorites.dart';
 
-/// Notifications affichées par l'appareil (Android/iOS).
+/// Notifications affichées par l'appareil (Android, iOS, macOS, Windows,
+/// Linux).
 ///
 /// Sur le web, ou si init() n'a pas été appelé (tests), toutes les méthodes
 /// sont sans effet : les notifications restent visibles dans l'écran dédié.
+/// Linux ne sait pas programmer une notification : les rappels y sont
+/// affichés à la synchronisation qui suit leur échéance.
 class LocalNotifications {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
@@ -29,7 +32,25 @@ class LocalNotifications {
       priority: Priority.high,
     ),
     iOS: DarwinNotificationDetails(),
+    macOS: DarwinNotificationDetails(),
+    linux: LinuxNotificationDetails(),
+    windows: WindowsNotificationDetails(),
   );
+
+  static const _settings = InitializationSettings(
+    android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    iOS: DarwinInitializationSettings(),
+    macOS: DarwinInitializationSettings(),
+    linux: LinuxInitializationSettings(defaultActionName: 'Ouvrir'),
+    windows: WindowsInitializationSettings(
+      appName: 'Partage+',
+      appUserModelId: 'PartagePlus.RepasPartage',
+      guid: '3f6c1a52-8d4e-4b7a-9c21-5e0f7d9a6b13',
+    ),
+  );
+
+  /// false sur Linux : pas de notification programmée (voir la classe).
+  static bool get _canSchedule => defaultTargetPlatform != TargetPlatform.linux;
 
   /// Types envoyés aussi par le serveur mais déjà programmés localement.
   static const _plannedLocally = {'pickup_reminder', 'expiry_soon'};
@@ -51,12 +72,7 @@ class LocalNotifications {
   Future<void> _init() async {
     if (kIsWeb) return;
     tzdata.initializeTimeZones();
-    await _plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        iOS: DarwinInitializationSettings(),
-      ),
-    );
+    await _plugin.initialize(settings: _settings);
     _ready = true;
     // Pas attendu : les rappels se programment pendant que l'utilisateur
     // répond à la demande d'autorisation.
@@ -120,6 +136,7 @@ class LocalNotifications {
 
     for (final notification in planned) {
       if (notification.at.isAfter(now)) {
+        if (!_canSchedule) continue;
         await _plugin.zonedSchedule(
           id: notification.id,
           scheduledDate: tz.TZDateTime.from(notification.at, tz.UTC),

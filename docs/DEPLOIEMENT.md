@@ -32,13 +32,13 @@
    DATABASE_URL="mysql://…" npm run db:seed
    ```
 
-5. Vérifier : `https://repas-partage-api.onrender.com/health` → `{"status":"ok"}`.
+5. Vérifier : `https://repo-partage-plus.onrender.com/health` → `{"status":"ok"}`.
 
 **Limites du plan gratuit :** le service s'endort après 15 min sans requête et met ~50 s à se réveiller ;
 les tâches planifiées ne tournent pas pendant son sommeil. Pour y remédier, créer sur
 <https://cron-job.org> une tâche toutes les 10 min :
 
-- URL : `https://repas-partage-api.onrender.com/api/jobs/run`, méthode `POST` ;
+- URL : `https://repo-partage-plus.onrender.com/api/jobs/run`, méthode `POST` ;
 - en-tête `X-Jobs-Token` : valeur de `JOBS_TOKEN` (onglet **Environment** du service Render).
 
 Cela garde l'API éveillée et envoie les rappels de retrait / alertes DLC à l'heure.
@@ -69,7 +69,7 @@ Sans `JWT_SECRET` d'au moins 32 caractères, l'API refuse de démarrer en produc
 
 GitHub → **Settings → Secrets and variables → Actions → Variables** → **New repository variable** :
 
-- `API_BASE_URL` = `https://repas-partage-api.onrender.com/api`
+- `API_BASE_URL` = `https://repo-partage-plus.onrender.com/api`
 
 Utilisée par la CI et le déploiement pour construire l'APK et le web avec la bonne adresse d'API.
 
@@ -99,6 +99,6 @@ Chaque PR vers `dev` produit aussi un APK de test dans l'onglet **Actions** (art
 ## Build manuel (secours)
 
 ```bash
-flutter build apk --release --dart-define=API_BASE_URL=https://repas-partage-api.onrender.com/api
-flutter build web --release --dart-define=API_BASE_URL=https://repas-partage-api.onrender.com/api
+flutter build apk --release --dart-define=API_BASE_URL=https://repo-partage-plus.onrender.com/api
+flutter build web --release --dart-define=API_BASE_URL=https://repo-partage-plus.onrender.com/api
 ```

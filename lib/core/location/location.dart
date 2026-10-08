@@ -67,6 +67,12 @@ abstract class LocationGateway {
 class GeolocatorGateway implements LocationGateway {
   @override
   Future<Place> currentPosition() async {
+    // geolocator n'existe pas sur Linux.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.linux) {
+      throw const LocationFailure(
+        'Position indisponible sur Linux : choisissez un point sur la carte.',
+      );
+    }
     // Sur le web, c'est le navigateur qui gère service et autorisation.
     if (!kIsWeb && !await Geolocator.isLocationServiceEnabled()) {
       throw const LocationFailure(

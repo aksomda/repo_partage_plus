@@ -25,6 +25,32 @@ export const DEFAULT_ACTORS = [
   ['administrateur', 'Administrateur', 'Gère la plateforme', 'admin_panel_settings', 'admin', false],
 ];
 
+/**
+ * Catégories créées sur une base neuve (TiDB…) : sans elles, aucune offre
+ * ne peut être publiée. Modifiables ensuite par l'admin.
+ */
+export const DEFAULT_CATEGORIES = [
+  // [nom, icône, kg CO2 évité par kg, repas par kg]
+  ['Fruits et légumes', 'eco', 0.9, 2.5],
+  ['Boulangerie', 'bakery_dining', 1.4, 3],
+  ['Plats cuisinés', 'restaurant', 3.5, 2.5],
+  ['Produits laitiers', 'egg', 3.2, 2.5],
+  ['Épicerie', 'shopping_basket', 2, 2.5],
+  ['Boissons', 'local_drink', 0.6, 0],
+];
+
+/** Ajoute les catégories manquantes et leurs facteurs d'impact. */
+export async function insertDefaultCategories(conn, source = 'Valeurs indicatives') {
+  for (const [name, icon, co2, meals] of DEFAULT_CATEGORIES) {
+    await conn.query('INSERT IGNORE INTO categories (name, icon) VALUES (?, ?)', [name, icon]);
+    await conn.query(
+      `INSERT IGNORE INTO impact_factors (category_id, co2_kg_per_kg, meals_per_kg, source)
+       SELECT id, ?, ?, ? FROM categories WHERE name = ?`,
+      [co2, meals, source, name],
+    );
+  }
+}
+
 /** Colonnes de `users` ajoutées après la première version du schéma. */
 const USER_COLUMNS = {
   first_name: 'VARCHAR(80) NULL AFTER name',
@@ -143,6 +169,10 @@ async function upgrade(conn) {
       );
     }
   }
+
+  // Catégories par défaut, uniquement si l'admin n'en a encore créé aucune.
+  const [[{ categories }]] = await conn.query('SELECT COUNT(*) AS categories FROM categories');
+  if (categories === 0) await insertDefaultCategories(conn);
 
   // Bases créées avant l'acteur « Association » : ajouté une seule fois, s'il
   // n'existe encore aucun acteur avec ces droits (l'admin peut le désactiver).

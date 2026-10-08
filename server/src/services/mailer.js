@@ -30,6 +30,11 @@ function smtpTransport() {
  * tout de suite un mot de passe ou un hôte erroné (sans rien envoyer).
  */
 export async function checkMailer() {
+  if (config.mail.transport === 'brevo') {
+    return config.brevo.apiKey
+      ? `E-mails envoyés par l'API Brevo (expéditeur ${config.mail.from ?? config.smtp.from})`
+      : 'MAIL_TRANSPORT=brevo mais BREVO_API_KEY manquante : aucun e-mail ne partira';
+  }
   if (config.mail.transport === 'firebase') {
     return `E-mails déposés dans Firestore (collection ${config.mail.collection}, extension Trigger Email)`;
   }
@@ -88,6 +93,52 @@ async function sendWithFirebase({ to, subject, text, html }) {
   });
 }
 
+const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
+
+let mailFetch = null;
+
+/** « Nom <adresse> » ou « adresse » → { name, email } (format Brevo). */
+export function parseAddress(value) {
+  const match = /^\s*(.*?)\s*<([^>]+)>\s*$/.exec(value);
+  if (!match) return { email: value.trim() };
+  return match[1] ? { name: match[1].replace(/^"|"$/g, ''), email: match[2] } : { email: match[2] };
+}
+
+/**
+ * Envoi par l'API HTTPS de Brevo : contourne le blocage des ports SMTP
+ * (25, 465, 587) par certains hébergeurs, dont Render en offre gratuite.
+ * L'expéditeur (MAIL_FROM) doit être validé dans Brevo → Senders.
+ */
+async function sendWithBrevo({ to, subject, text, html }) {
+  let response;
+  try {
+    response = await (mailFetch ?? fetch)(BREVO_URL, {
+      method: 'POST',
+      headers: {
+        'api-key': config.brevo.apiKey,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: parseAddress(config.mail.from ?? config.smtp.from),
+        to: [{ email: to }],
+        ...(config.mail.replyTo ? { replyTo: parseAddress(config.mail.replyTo) } : {}),
+        subject,
+        textContent: text,
+        ...(html ? { htmlContent: html } : {}),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    console.error(`Brevo : e-mail à ${to} non envoyé :`, error.message);
+    throw new HttpError(503, 'L’e-mail n’a pas pu être envoyé : réessayez plus tard');
+  }
+  if (!response.ok) {
+    console.error(`Brevo : e-mail à ${to} refusé (${response.status}) :`, await response.text());
+    throw new HttpError(503, 'L’e-mail n’a pas pu être envoyé : réessayez plus tard');
+  }
+}
+
 async function sendWithSmtp({ to, subject, text, html }) {
   try {
     await smtpTransport().sendMail({
@@ -112,8 +163,14 @@ async function sendWithSmtp({ to, subject, text, html }) {
  * configuré, hors production, le message est affiché dans la console.
  */
 export async function sendMail(mail) {
-  if (process.env.NODE_ENV === 'test' && mailStore === realMailStore) {
+  if (process.env.NODE_ENV === 'test' && mailStore === realMailStore && !mailFetch) {
     sentMails.push({ to: mail.to, subject: mail.subject, text: mail.text });
+    return;
+  }
+
+  if (config.mail.transport === 'brevo') {
+    if (!config.brevo.apiKey) throw new Error('MAIL_TRANSPORT=brevo sans BREVO_API_KEY');
+    await sendWithBrevo(mail);
     return;
   }
 
@@ -152,4 +209,9 @@ export async function purgeFirebaseMails(now = new Date()) {
 /** Pour les tests uniquement. `null` rétablit Firestore. */
 export function setMailStore(fake) {
   mailStore = fake ?? realMailStore;
+}
+
+/** Pour les tests uniquement : remplace fetch pour Brevo. `null` rétablit fetch. */
+export function setMailFetch(fake) {
+  mailFetch = fake;
 }

@@ -1,10 +1,10 @@
 # Mise en ligne de la démo.
 # - push sur main       → build web publié sur GitHub Pages
-# - tag v* (ex. v1.0.0)  → APK Android attaché à une release GitHub
+# - tag v* (ex. v1.0.0)  → APK Android et installeur Windows attachés à une release GitHub
 # L'API (dossier server/) est déployée par Render à chaque push sur main (render.yaml).
 #
 # Prérequis : variable de dépôt API_BASE_URL (Settings → Secrets and variables
-# → Actions → Variables), ex. https://repas-partage-api.onrender.com/api
+# → Actions → Variables), ex. https://repo-partage-plus.onrender.com/api
 
 name: Déploiement
 
@@ -74,6 +74,25 @@ jobs:
 
       - run: flutter pub get
 
+      - name: Keystore de release
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 manquant : l'APK de release doit être signé avec la clé de release."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
       - name: Build APK
         run: >-
           flutter build apk --release
@@ -85,4 +104,41 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: repas-partage-${{ github.ref_name }}.apk
+          generate_release_notes: true
+
+  windows:
+    name: Installeur Windows → Release GitHub
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - name: Build Windows
+        run: >-
+          flutter build windows --release
+          --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+
+      - name: Installeur (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            $env:Path += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          iscc "/DAppVersion=$version" windows\installer\partage_plus.iss
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: build/installer/partage-plus-setup-*.exe
           generate_release_notes: true

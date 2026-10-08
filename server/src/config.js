@@ -99,10 +99,15 @@ export const config = {
     password: env.SMTP_PASSWORD || null,
     from: env.MAIL_FROM || 'Partage+ <a.ksomda@gmail.com>',
   },
+  // API HTTPS de Brevo (MAIL_TRANSPORT=brevo) : hébergeurs qui bloquent SMTP.
+  brevo: {
+    apiKey: env.BREVO_API_KEY || null,
+  },
   // Envoi des e-mails : 'firebase' (extension Trigger Email, collection
-  // Firestore) ou 'smtp'. Avec Firebase, SMTP sert de secours s'il est rempli.
+  // Firestore), 'brevo' (API HTTPS) ou 'smtp'. Avec Firebase, SMTP sert de
+  // secours s'il est rempli.
   mail: {
-    transport: env.MAIL_TRANSPORT === 'firebase' ? 'firebase' : 'smtp',
+    transport: ['firebase', 'brevo'].includes(env.MAIL_TRANSPORT) ? env.MAIL_TRANSPORT : 'smtp',
     collection: env.MAIL_COLLECTION || 'mail',
     // Sans MAIL_FROM, l'extension utilise son expéditeur par défaut.
     from: env.MAIL_FROM || null,

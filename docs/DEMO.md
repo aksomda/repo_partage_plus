@@ -25,7 +25,7 @@ Mot de passe de tous les comptes : `Demo1234!`
 
 ## Checklist H-1
 
-- [ ] Réveiller l'API : ouvrir `https://repas-partage-api.onrender.com/health` (peut prendre ~50 s)
+- [ ] Réveiller l'API : ouvrir `https://repo-partage-plus.onrender.com/health` (peut prendre ~50 s)
 - [ ] Téléphone chargé, Wi-Fi/4G OK, localisation activée, notifications autorisées pour l'app
 - [ ] Déconnecté de tous les comptes, onglets inutiles fermés
 - [ ] Partage de l'écran du téléphone testé (câble ou scrcpy)

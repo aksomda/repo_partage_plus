@@ -3,19 +3,10 @@ import { pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
 
 import { config } from '../config.js';
+import { insertDefaultCategories } from './migrate.js';
 import { pool, transaction } from './pool.js';
 
 export const DEMO_PASSWORD = 'Demo1234!';
-
-const CATEGORIES = [
-  // [nom, icône, kg CO2 évité par kg, repas par kg]
-  ['Fruits et légumes', 'eco', 0.9, 2.5],
-  ['Boulangerie', 'bakery_dining', 1.4, 3],
-  ['Plats cuisinés', 'restaurant', 3.5, 2.5],
-  ['Produits laitiers', 'egg', 3.2, 2.5],
-  ['Épicerie', 'shopping_basket', 2, 2.5],
-  ['Boissons', 'local_drink', 0.6, 0],
-];
 
 const USERS = [
   // [nom, email, rôle, code de l'acteur]
@@ -68,18 +59,10 @@ export async function seed({ fresh = false } = {}) {
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
 
   await transaction(async (conn) => {
-    const categoryIds = {};
-    for (const [name, icon, co2, meals] of CATEGORIES) {
-      const [result] = await conn.query(
-        'INSERT INTO categories (name, icon) VALUES (?, ?)',
-        [name, icon],
-      );
-      categoryIds[name] = result.insertId;
-      await conn.query(
-        'INSERT INTO impact_factors (category_id, co2_kg_per_kg, meals_per_kg, source) VALUES (?, ?, ?, ?)',
-        [result.insertId, co2, meals, 'Valeurs indicatives pour la démo'],
-      );
-    }
+    // Déjà créées par la migration, sauf après --fresh.
+    await insertDefaultCategories(conn, 'Valeurs indicatives pour la démo');
+    const [categories] = await conn.query('SELECT id, name FROM categories');
+    const categoryIds = Object.fromEntries(categories.map(({ id, name }) => [name, id]));
 
     const userIds = {};
     for (const [name, email, role, actorCode] of USERS) {
