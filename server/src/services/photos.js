@@ -1,9 +1,10 @@
 import { z } from 'zod';
 
+import { query } from '../db/pool.js';
 import { HttpError } from '../http/errors.js';
 
 /** Taille maximale d'une photo, une fois décodée (l'application la réduit avant envoi). */
-export const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
+export const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
 
 /** Signature des formats acceptés (premiers octets du fichier). */
 const SIGNATURES = {
@@ -20,22 +21,38 @@ const SIGNATURES = {
  */
 export const photoSchema = z
   .string()
-  .max(Math.ceil((MAX_PHOTO_BYTES * 4) / 3) + 40, 'Photo trop lourde (2 Mo maximum)')
+  .max(Math.ceil((MAX_PHOTO_BYTES * 4) / 3) + 40, 'Photo trop lourde (3 Mo maximum)')
   .regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/, 'Photo invalide : JPEG, PNG ou WebP')
   .nullable()
   .optional();
 
-function decode(dataUrl) {
+export function decode(dataUrl) {
   const [header, base64] = dataUrl.split(',');
   const mime = header.slice('data:'.length, header.indexOf(';'));
   const data = Buffer.from(base64, 'base64');
   if (data.length > MAX_PHOTO_BYTES) {
-    throw new HttpError(400, 'Photo trop lourde (2 Mo maximum)', { field: 'photo' });
+    throw new HttpError(400, 'Photo trop lourde (3 Mo maximum)', { field: 'photo' });
   }
   if (!SIGNATURES[mime]?.(data)) {
     throw new HttpError(400, 'Photo invalide : JPEG, PNG ou WebP', { field: 'photo' });
   }
   return { mime, data };
+}
+
+/** Enregistre, remplace ou retire la photo de profil du compte. */
+export async function saveUserPhoto(userId, photo) {
+  if (photo === null) {
+    await query('DELETE FROM user_photos WHERE user_id = ?', [userId]);
+    await query('UPDATE users SET photo_updated_at = NULL WHERE id = ?', [userId]);
+    return;
+  }
+  const { mime, data } = decode(photo);
+  await query(
+    `INSERT INTO user_photos (user_id, mime, data) VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE mime = VALUES(mime), data = VALUES(data)`,
+    [userId, mime, data],
+  );
+  await query('UPDATE users SET photo_updated_at = NOW() WHERE id = ?', [userId]);
 }
 
 /** Enregistre, remplace ou retire la photo de l'offre (dans la transaction). */

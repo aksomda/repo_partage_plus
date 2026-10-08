@@ -68,6 +68,7 @@ class ReservationsRepository {
     required String offerTitle,
     int quantity = 1,
     String? paymentReference,
+    int? slotId,
   }) {
     return _sync.submit(
       PendingAction(
@@ -78,6 +79,7 @@ class ReservationsRepository {
           'offer_id': offerId,
           'quantity': quantity,
           'payment_reference': ?paymentReference,
+          'slot_id': ?slotId,
         },
         label: 'Réservation de « $offerTitle »',
       ),

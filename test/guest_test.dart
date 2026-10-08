@@ -99,6 +99,27 @@ void main() {
       );
     });
 
+    test('mes offres / des autres', () {
+      final mine = [
+        offers[0],
+        // En attente de validation et loin : affichée quand même.
+        {
+          ...publishedOffer(id: 9, title: 'Jus', lat: 13.5),
+          'status': 'pending',
+        },
+      ];
+      List<Object?> ids(OfferOwner owner) => filterOffersByOwner(
+        available: offers,
+        mine: mine,
+        origin: here,
+        filters: OfferFilters(radiusKm: 50, owner: owner),
+      ).map((offer) => offer['id']).toList();
+
+      expect(ids(OfferOwner.all), [1, 2, 3]);
+      expect(ids(OfferOwner.mine), [1, 9]);
+      expect(ids(OfferOwner.others), [2, 3]);
+    });
+
     test('sans point de départ : toutes les offres, sans distance', () {
       final result = filterOffers(offers, null, const OfferFilters());
       expect(result, hasLength(3));
@@ -186,7 +207,7 @@ void main() {
           isA<ApiException>().having(
             (e) => e.message,
             'message',
-            'Connexion Internet requise',
+            startsWith('Serveur injoignable'),
           ),
         ),
       );

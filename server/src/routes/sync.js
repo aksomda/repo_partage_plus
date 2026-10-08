@@ -2,15 +2,29 @@ import { Router } from 'express';
 
 import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
-import { OFFER_AVAILABLE, OFFER_SELECT } from '../services/offers.js';
+import { OFFER_AVAILABLE, OFFER_SELECT, OWN_OFFER_SELECT } from '../services/offers.js';
+import { donorInsights } from '../services/insights.js';
+import { loadSettings } from '../services/settings.js';
+import { loadStats, USER_SELECT } from './admin.js';
 import { loadProfile } from './auth.js';
-import { buildDashboard } from './impact.js';
+import { loadDirectMessages } from './direct_messages.js';
+import { MESSAGE_SELECT } from './messages.js';
+import { buildDashboard, buildGlobalImpact, publicImpact } from './impact.js';
 import { forViewer, RESERVATION_SELECT } from './reservations.js';
 
 export const syncRouter = Router();
 
 /** Nombre maximal d'offres disponibles copiées sur l'appareil. */
 const MAX_OFFERS = 500;
+
+/** Nombre maximal de comptes copiés sur l'appareil d'un administrateur. */
+const MAX_USERS = 2000;
+
+/** Messages du mini chat copiés sur l'appareil (×4 pour un administrateur). */
+const MAX_MESSAGES = 500;
+
+/** Nombre maximal de réservations (toute la plateforme) copiées pour l'admin. */
+const MAX_ADMIN_RESERVATIONS = 1000;
 
 const CATEGORIES_SQL = `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
   FROM categories c LEFT JOIN impact_factors f ON f.category_id = c.id
@@ -21,13 +35,14 @@ const CATEGORIES_SQL = `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
  * disponibles, copiées sur l'appareil pour chercher et filtrer hors ligne.
  */
 syncRouter.get('/public', async (req, res) => {
-  const [categories, offers] = await Promise.all([
+  const [categories, offers, impact] = await Promise.all([
     query(CATEGORIES_SQL),
     query(`${OFFER_SELECT} WHERE ${OFFER_AVAILABLE} ORDER BY o.expiry_date ASC LIMIT ?`, [
       MAX_OFFERS,
     ]),
+    publicImpact(),
   ]);
-  res.json({ server_time: new Date().toISOString(), categories, offers });
+  res.json({ server_time: new Date().toISOString(), categories, offers, public_impact: impact });
 });
 
 /**
@@ -40,6 +55,7 @@ syncRouter.get('/', authenticate, async (req, res) => {
   const isDonor = req.user.role !== 'admin';
   const isAdmin = req.user.role === 'admin';
 
+  // Tout part en parallèle : chaque aller-retour vers MySQL compte (tunnel SSH).
   const [
     profile,
     categories,
@@ -48,14 +64,15 @@ syncRouter.get('/', authenticate, async (req, res) => {
     received,
     myOffers,
     notifications,
+    messages,
+    directMessages,
     dashboard,
+    platformImpact,
+    offerInsights,
+    admin,
   ] = await Promise.all([
     loadProfile(userId),
-    query(
-      `SELECT c.*, f.co2_kg_per_kg, f.meals_per_kg
-       FROM categories c LEFT JOIN impact_factors f ON f.category_id = c.id
-       ORDER BY c.name`,
-    ),
+    query(CATEGORIES_SQL),
     query(
       `${OFFER_SELECT} WHERE ${OFFER_AVAILABLE} ORDER BY o.expiry_date ASC LIMIT ?`,
       [MAX_OFFERS],
@@ -67,34 +84,26 @@ syncRouter.get('/', authenticate, async (req, res) => {
       ? query(`${RESERVATION_SELECT} WHERE o.donor_id = ? ORDER BY r.created_at DESC`, [userId])
       : [],
     isDonor
-      ? query(`${OFFER_SELECT} WHERE o.donor_id = ? ORDER BY o.created_at DESC`, [userId])
+      ? query(`${OWN_OFFER_SELECT} WHERE o.donor_id = ? ORDER BY o.created_at DESC`, [userId])
       : [],
     query('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 100', [
       userId,
     ]),
+    // Mini chat : sa conversation ; pour un administrateur, toutes.
+    isAdmin
+      ? query(`${MESSAGE_SELECT} ORDER BY m.id DESC LIMIT ?`, [MAX_MESSAGES * 4])
+      : query(`${MESSAGE_SELECT} WHERE m.user_id = ? ORDER BY m.id DESC LIMIT ?`, [
+          userId,
+          MAX_MESSAGES,
+        ]),
+    // Échanges avec les publieurs ou bénéficiaires (pas pour l'administration).
+    isAdmin ? [] : loadDirectMessages(userId),
     buildDashboard(userId),
+    publicImpact(),
+    // Risque de gaspillage de ses offres en cours (écran « Mes offres » hors ligne).
+    isDonor ? donorInsights(userId) : [],
+    isAdmin ? loadAdminSnapshot(req.user) : null,
   ]);
-
-  const admin = isAdmin
-    ? {
-        pending_offers: await query(
-          `${OFFER_SELECT} WHERE o.status = 'pending' ORDER BY o.created_at ASC`,
-        ),
-        pending_associations: await query(
-          `SELECT a.*, u.name AS user_name, u.email, u.phone
-           FROM associations a JOIN users u ON u.id = a.user_id
-           WHERE a.status = 'pending' ORDER BY a.created_at ASC`,
-        ),
-        actors: await query(
-          `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
-           FROM actors a ORDER BY a.sort_order, a.label`,
-        ),
-        factors: await query(
-          `SELECT f.*, c.name AS category_name FROM impact_factors f
-           JOIN categories c ON c.id = f.category_id ORDER BY c.name`,
-        ),
-      }
-    : null;
 
   res.json({
     server_time: new Date().toISOString(),
@@ -104,7 +113,10 @@ syncRouter.get('/', authenticate, async (req, res) => {
     reservations,
     received: received.map((row) => forViewer(row, req.user)),
     my_offers: myOffers,
+    offer_insights: offerInsights,
     notifications,
+    messages,
+    direct_messages: directMessages,
     // Compteurs, évolution sur 12 mois, catégories et indicateurs sociaux :
     // gardés sur l'appareil pour l'écran « Mon impact » hors ligne.
     impact: dashboard.impact,
@@ -113,6 +125,46 @@ syncRouter.get('/', authenticate, async (req, res) => {
     impact_social: dashboard.impact_social,
     impact_as_of: dashboard.as_of,
     impact_source: dashboard.source,
+    // Compteurs de toute la plateforme, affichés sur l'accueil.
+    public_impact: platformImpact,
     admin,
   });
 });
+
+/** Données d'administration, gardées sur l'appareil de l'administrateur. */
+async function loadAdminSnapshot(viewer) {
+  const [moderationOffers, actors, factors, settings, users, reservations, impactGlobal, stats] =
+    await Promise.all([
+      // Offres visibles, que l'administrateur peut retirer en cas d'abus.
+      query(
+        `${OFFER_SELECT} WHERE o.status IN ('published', 'reserved') ORDER BY o.created_at DESC LIMIT ?`,
+        [MAX_OFFERS],
+      ),
+      query(
+        `SELECT a.*, (SELECT COUNT(*) FROM users u WHERE u.actor_id = a.id) AS users_count
+         FROM actors a ORDER BY a.sort_order, a.label`,
+      ),
+      query(
+        `SELECT f.*, c.name AS category_name FROM impact_factors f
+         JOIN categories c ON c.id = f.category_id ORDER BY c.name`,
+      ),
+      loadSettings(),
+      // Comptes, gardés sur l'appareil : gestion des utilisateurs hors ligne.
+      query(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [MAX_USERS]),
+      // Réservations de toute la plateforme (sans code de retrait), impact
+      // global et compteurs : écrans Réservations, Impact et Administration.
+      query(`${RESERVATION_SELECT} ORDER BY r.created_at DESC LIMIT ?`, [MAX_ADMIN_RESERVATIONS]),
+      buildGlobalImpact(),
+      loadStats(),
+    ]);
+  return {
+    moderation_offers: moderationOffers,
+    actors,
+    factors,
+    settings,
+    users,
+    reservations: reservations.map((row) => forViewer(row, viewer)),
+    impact_global: impactGlobal,
+    stats,
+  };
+}

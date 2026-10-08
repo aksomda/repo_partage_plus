@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/notifications/push_messaging.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
 import 'package:repo_partage_plus/core/widgets/brand_logo.dart';
@@ -32,10 +33,24 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   var _loading = false;
   var _resendIn = 0;
   Timer? _timer;
+  StreamSubscription<PushedCode>? _pushedCodes;
 
   @override
   void initState() {
     super.initState();
+    // Code reçu par notification sur ce téléphone : champ rempli tout seul.
+    _pushedCodes = ref
+        .read(pushMessagingProvider)
+        .codes
+        .where((pushed) => pushed.purpose == 'activation')
+        .listen((pushed) {
+          if (!mounted) return;
+          _code.text = pushed.code;
+          showMessage(
+            context,
+            'Code reçu par notification : vérifiez et validez',
+          );
+        });
     // Arrivée juste après l'inscription : un code vient d'être envoyé.
     if (widget.initialEmail.isNotEmpty) _startCountdown();
   }
@@ -43,6 +58,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _pushedCodes?.cancel();
     _email.dispose();
     _code.dispose();
     super.dispose();
@@ -109,8 +125,8 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
         const AuthHeading(
           title: 'Vérifiez votre e-mail',
           subtitle:
-              'Saisissez le code à 6 chiffres reçu par e-mail pour activer '
-              'votre compte. Pensez à regarder dans les spams.',
+              'Saisissez le code à 6 chiffres reçu par e-mail, SMS ou '
+              'notification. Pensez aux spams.',
         ),
         const SizedBox(height: 24),
         Form(

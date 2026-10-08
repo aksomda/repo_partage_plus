@@ -3,24 +3,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:repo_partage_plus/core/network/api_client.dart';
+import 'package:repo_partage_plus/core/offline/offline_screen.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
+import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/admin/presentation/account_moderation_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/actors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/admin_dashboard_screen.dart';
-import 'package:repo_partage_plus/features/admin/presentation/association_validation_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_impact_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_manage_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/admin_reservations_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/categories_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/factors_screen.dart';
 import 'package:repo_partage_plus/features/admin/presentation/offer_moderation_screen.dart';
+import 'package:repo_partage_plus/features/admin/presentation/settings_screen.dart';
+import 'package:repo_partage_plus/features/auth/presentation/forgot_password_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/login_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/profile_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/register_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/splash_screen.dart';
 import 'package:repo_partage_plus/features/auth/presentation/verify_email_screen.dart';
+import 'package:repo_partage_plus/features/discovery/presentation/filters_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/home_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/location_picker_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/nearby_offers_map_screen.dart';
 import 'package:repo_partage_plus/features/discovery/presentation/search_screen.dart';
 import 'package:repo_partage_plus/features/impact/presentation/impact_screen.dart';
+import 'package:repo_partage_plus/features/notifications/presentation/conversation_screen.dart';
+import 'package:repo_partage_plus/features/notifications/presentation/messages_screen.dart';
 import 'package:repo_partage_plus/features/notifications/presentation/notifications_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/create_offer_screen.dart';
 import 'package:repo_partage_plus/features/offers/presentation/my_offers_screen.dart';
@@ -32,20 +41,29 @@ import 'package:repo_partage_plus/features/reservations/presentation/reserve_scr
 import 'package:repo_partage_plus/features/reservations/presentation/reservation_confirmation_screen.dart';
 
 /// [isLoggedIn] : null (tests) = aucune redirection vers la connexion.
+/// [isAdmin] : null tant que le profil n'est pas connu (pas de redirection) ;
+/// false : les écrans d'administration renvoient à l'accueil.
 GoRouter createRouter({
   String initialLocation = AppRoutes.splash,
   bool Function()? isLoggedIn,
+  bool? Function()? isAdmin,
   Listenable? refreshListenable,
 }) {
   return GoRouter(
     initialLocation: initialLocation,
     refreshListenable: refreshListenable,
     redirect: (context, state) {
-      if (isLoggedIn == null || isLoggedIn()) return null;
+      if (isLoggedIn == null) return null;
       final path = state.uri.path;
-      return AppRoutes.requiresLogin(path)
-          ? AppRoutes.loginThen(state.uri.toString())
-          : null;
+      if (!isLoggedIn()) {
+        return AppRoutes.requiresLogin(path)
+            ? AppRoutes.loginThen(state.uri.toString())
+            : null;
+      }
+      if (AppRoutes.requiresAdmin(path) && isAdmin?.call() == false) {
+        return AppRoutes.home;
+      }
+      return null;
     },
     routes: [
       // Auth
@@ -71,6 +89,12 @@ GoRouter createRouter({
         ),
       ),
       GoRoute(
+        path: AppRoutes.forgotPassword,
+        builder: (context, state) => ForgotPasswordScreen(
+          initialEmail: state.uri.queryParameters['email'] ?? '',
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.profile,
         builder: (context, state) => const ProfileScreen(),
       ),
@@ -87,6 +111,14 @@ GoRouter createRouter({
       GoRoute(
         path: AppRoutes.search,
         builder: (context, state) => const SearchScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.filters,
+        builder: (context, state) => const FiltersScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.offline,
+        builder: (context, state) => const OfflineScreen(),
       ),
       GoRoute(
         path: AppRoutes.pickLocation,
@@ -106,6 +138,12 @@ GoRouter createRouter({
         path: AppRoutes.offerDetail,
         builder: (context, state) =>
             OfferDetailScreen(offerId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: AppRoutes.editOfferPattern,
+        builder: (context, state) => CreateOfferScreen(
+          offerId: int.tryParse(state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: AppRoutes.reservePattern,
@@ -136,6 +174,27 @@ GoRouter createRouter({
         builder: (context, state) => const NotificationsScreen(),
       ),
       GoRoute(
+        path: AppRoutes.messages,
+        builder: (context, state) => const MessagesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.teamMessages,
+        builder: (context, state) => const TeamMessagesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.directConversationPattern,
+        builder: (context, state) => DirectConversationScreen(
+          peerId: int.parse(state.pathParameters['peerId']!),
+          offerId: int.tryParse(state.uri.queryParameters['offer'] ?? ''),
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.conversationPattern,
+        builder: (context, state) => ConversationScreen(
+          userId: int.parse(state.pathParameters['userId']!),
+        ),
+      ),
+      GoRoute(
         path: AppRoutes.impact,
         builder: (context, state) => const ImpactScreen(),
       ),
@@ -158,10 +217,6 @@ GoRouter createRouter({
         builder: (context, state) => const AccountModerationScreen(),
       ),
       GoRoute(
-        path: AppRoutes.adminAssociations,
-        builder: (context, state) => const AssociationValidationScreen(),
-      ),
-      GoRoute(
         path: AppRoutes.adminCategories,
         builder: (context, state) => const CategoriesScreen(),
       ),
@@ -173,6 +228,22 @@ GoRouter createRouter({
         path: AppRoutes.adminActors,
         builder: (context, state) => const ActorsScreen(),
       ),
+      GoRoute(
+        path: AppRoutes.adminSettings,
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminReservations,
+        builder: (context, state) => const AdminReservationsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminImpact,
+        builder: (context, state) => const AdminImpactScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminManage,
+        builder: (context, state) => const AdminManageScreen(),
+      ),
     ],
   );
 }
@@ -182,13 +253,24 @@ class _SessionListenable extends ChangeNotifier {
   void changed() => notifyListeners();
 }
 
+/// Premier écran : remplacé dans main() par l'accueil du compte quand une
+/// session existe déjà (pas de détour par l'écran de démarrage).
+final initialLocationProvider = Provider<String>((ref) => AppRoutes.splash);
+
 final routerProvider = Provider<GoRouter>((ref) {
   final session = _SessionListenable();
   ref.listen(authTokenProvider, (_, _) => session.changed());
+  // Rôle connu ou changé : les droits sur les écrans sont réévalués.
+  ref.listen(profileProvider, (_, _) => session.changed());
   ref.onDispose(session.dispose);
 
   final router = createRouter(
+    initialLocation: ref.read(initialLocationProvider),
     isLoggedIn: () => ref.read(authTokenProvider) != null,
+    isAdmin: () {
+      final profile = ref.read(profileProvider);
+      return profile == null ? null : profile['role'] == 'admin';
+    },
     refreshListenable: session,
   );
   ref.onDispose(router.dispose);

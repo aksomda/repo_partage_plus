@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/network/api_endpoints.dart';
 import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
@@ -55,6 +56,7 @@ class SyncService {
       } on DioException {
         // Hors ligne : on garde la dernière copie.
       }
+      await _refreshDevice(guest: true);
       return const SyncReport(SyncOutcome.loggedOut);
     }
 
@@ -70,7 +72,11 @@ class SyncService {
           data: action.body,
           options: Options(
             method: action.method,
-            headers: {'Idempotency-Key': action.key},
+            headers: {
+              'Idempotency-Key': action.key,
+              // Heure réelle de l'action (ex. retrait validé hors ligne).
+              'X-Action-At': action.createdAt.toIso8601String(),
+            },
           ),
         );
         await outbox.remove(action.localId!);
@@ -119,7 +125,18 @@ class SyncService {
     }
 
     await notifications.showNewServerNotifications(store);
-    await notifications.reschedule(store);
+    await _refreshDevice(guest: false);
     return SyncReport(SyncOutcome.done, sent: sent, rejected: rejected);
+  }
+
+  /// Avec ou sans compte : suivi des réservations faites sans compte et
+  /// rappels programmés. Alertes des recherches enregistrées calculées ici
+  /// seulement sans compte : un compte les reçoit du serveur, en push
+  /// (application fermée comprise).
+  Future<void> _refreshDevice({required bool guest}) async {
+    await refreshGuestItems(dio, store);
+    await notifications.showGuestReservationChanges(store);
+    if (guest) await notifications.alertNewOffers(store);
+    await notifications.reschedule(store);
   }
 }

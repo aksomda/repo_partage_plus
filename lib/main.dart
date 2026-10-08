@@ -9,8 +9,11 @@ import 'package:repo_partage_plus/core/firebase/firebase_init.dart';
 import 'package:repo_partage_plus/core/maps/offline_tiles.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/notifications/local_notifications.dart';
+import 'package:repo_partage_plus/core/router/app_router.dart';
+import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/storage/database_opener.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/core/widgets/friendly_error.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,7 +29,10 @@ Future<void> main() async {
     }),
   ).wait;
   final store = LocalStore(database);
-  final token = await store.readToken();
+  final (token, profile) = await (
+    store.readToken(),
+    store.readSnapshot('profile'),
+  ).wait;
 
   // Firebase (connexion, IA) et notifications (demande d'autorisation)
   // s'initialisent pendant que le premier écran s'affiche.
@@ -43,6 +49,9 @@ Future<void> main() async {
       overrides: [
         localStoreProvider.overrideWithValue(store),
         initialTokenProvider.overrideWithValue(token),
+        // Session existante : l'accueil du compte s'ouvre directement.
+        if (token != null)
+          initialLocationProvider.overrideWithValue(AppRoutes.homeFor(profile)),
         localNotificationsProvider.overrideWithValue(notifications),
       ],
       child: const RepasPartageApp(),
@@ -51,8 +60,8 @@ Future<void> main() async {
 }
 
 /// Une erreur imprévue (réseau, Firebase, serveur…) est journalisée sans
-/// fermer l'application ; un widget en erreur affiche un message sobre au
-/// lieu de l'écran rouge (en version publiée).
+/// fermer l'application ; un widget en erreur affiche un message convivial
+/// au lieu de l'écran rouge.
 void _keepRunningOnErrors() {
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
@@ -62,18 +71,5 @@ void _keepRunningOnErrors() {
     debugPrint('Erreur non gérée (l’application continue) : $error');
     return true;
   };
-  if (kReleaseMode) {
-    ErrorWidget.builder = (details) => const Material(
-      color: Colors.transparent,
-      child: Center(
-        child: Padding(
-          padding: EdgeInsets.all(16),
-          child: Text(
-            'Contenu momentanément indisponible',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
-    );
-  }
+  ErrorWidget.builder = (details) => FriendlyErrorWidget(details: details);
 }

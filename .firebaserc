@@ -1,5 +1,13 @@
 {
   "projects": {
     "default": "partageplus-f8840"
+  },
+  "targets": {},
+  "etags": {
+    "partageplus-f8840": {
+      "extensionInstances": {
+        "firestore-send-email": "2f6928f50878920f54095030e5a8bf58e520a73920ccde092bd22794ea76b50d"
+      }
+    }
   }
 }

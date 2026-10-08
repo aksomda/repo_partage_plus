@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/network/api_config.dart';
@@ -30,6 +31,15 @@ class ApiException implements Exception {
 
   /// true si le serveur n'a pas pu être joint.
   bool get isNetwork => statusCode == null;
+
+  /// Aucune réponse du serveur : pas de réseau, ou API injoignable (serveur
+  /// arrêté, mauvaise adresse). En développement, l'adresse visée est
+  /// affichée pour repérer une mauvaise valeur de API_BASE_URL.
+  factory ApiException.unreachable() => ApiException(
+    'Serveur injoignable : vérifiez votre connexion Internet '
+    'ou réessayez dans un instant'
+    '${kDebugMode ? '\n(API : ${ApiConfig.baseUrl})' : ''}',
+  );
 
   factory ApiException.fromDio(DioException error) {
     final data = error.response?.data;

@@ -2,7 +2,13 @@ import { Router } from 'express';
 
 import { query } from '../db/pool.js';
 import { authenticate } from '../http/auth.js';
-import { DISTANCE_KM, OFFER_AVAILABLE, DONOR_NAME, PUBLISHER_TYPE } from '../services/offers.js';
+import {
+  DISTANCE_KM,
+  DONOR_NAME,
+  OFFER_AVAILABLE,
+  PUBLISHER_TYPE,
+  SLOTS_JSON,
+} from '../services/offers.js';
 
 export const recommendationsRouter = Router();
 
@@ -24,7 +30,7 @@ recommendationsRouter.get('/', authenticate, async (req, res) => {
   const offers = await query(
     `SELECT o.*, c.name AS category_name, c.icon AS category_icon, ${DONOR_NAME} AS donor_name, ${PUBLISHER_TYPE} AS publisher_type,
             o.donor_id IS NULL AS is_guest, o.guest_phone AS contact_phone,
-            COALESCE(pref.score, 0) AS affinity,
+            ${SLOTS_JSON} AS slots, COALESCE(pref.score, 0) AS affinity,
             ${distance} AS distance_km
      FROM offers o
      JOIN categories c ON c.id = o.category_id

@@ -126,9 +126,19 @@ class FakeAuthGateway implements AuthGateway {
   final calls = <String>[];
   String? current;
 
+  /// Firebase injoignable (réseau, panne).
+  bool down = false;
+
+  void _failIfDown() {
+    if (down) {
+      throw const FirebaseAuthFailure('network-request-failed', 'Injoignable');
+    }
+  }
+
   @override
   Future<String> createAccount(String email, String password) async {
     calls.add('create');
+    _failIfDown();
     if (accounts.containsKey(email)) {
       throw const FirebaseAuthFailure('email-already-in-use', 'Déjà utilisé');
     }
@@ -140,6 +150,7 @@ class FakeAuthGateway implements AuthGateway {
   @override
   Future<String> signIn(String email, String password) async {
     calls.add('signIn');
+    _failIfDown();
     if (accounts[email] != password) {
       throw const FirebaseAuthFailure('invalid-credential', 'Incorrect');
     }

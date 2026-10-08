@@ -54,76 +54,118 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
             colors: [Colors.white, AppColors.primarySoft],
           ),
         ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(32),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 400),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const SizedBox(height: 24),
-                    const Center(child: BrandLogo.full(size: 220)),
-                    const SizedBox(height: 32),
-                    Text(
-                      'Ensemble contre le gaspillage\n'
-                      'pour un avenir plus durable !',
-                      textAlign: TextAlign.center,
-                      style: textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        height: 1.4,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Récupérez les invendus des commerces et restaurants '
-                      'près de chez vous, ou publiez les vôtres.',
-                      textAlign: TextAlign.center,
-                      style: textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 48),
-                    FilledButton.icon(
-                      onPressed: _start,
-                      icon: const Icon(Icons.near_me_outlined),
-                      label: const Text('Commencer'),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Voir les offres autour de vous, sans compte',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    OutlinedButton(
-                      onPressed: () => context.push(AppRoutes.register),
-                      child: const Text('S’inscrire'),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      crossAxisAlignment: WrapCrossAlignment.center,
+        child: Stack(
+          children: [
+            // Feuilles décoratives dans les coins (maquette).
+            const Positioned(
+              top: -30,
+              right: -30,
+              child: _Leaf(size: 150, angle: 2.4, alpha: 0.10),
+            ),
+            const Positioned(
+              bottom: -40,
+              left: -40,
+              child: _Leaf(size: 190, angle: 0.6, alpha: 0.14),
+            ),
+            const Positioned(
+              bottom: 40,
+              right: -20,
+              child: _Leaf(size: 90, angle: -0.5, alpha: 0.10),
+            ),
+            SafeArea(
+              child: Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(32),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 400),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text(
-                          'Déjà un compte ?',
-                          style: TextStyle(color: AppColors.textMuted),
+                        const SizedBox(height: 24),
+                        const Center(child: BrandLogo.full(size: 220)),
+                        const SizedBox(height: 32),
+                        Text(
+                          'Ensemble contre le gaspillage\n'
+                          'pour un avenir plus durable !',
+                          textAlign: TextAlign.center,
+                          style: textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            height: 1.4,
+                          ),
                         ),
-                        TextButton(
+                        const SizedBox(height: 12),
+                        Text(
+                          'Récupérez les invendus des commerces et restaurants '
+                          'près de chez vous, ou publiez les vôtres.',
+                          textAlign: TextAlign.center,
+                          style: textTheme.bodyMedium?.copyWith(
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                        const SizedBox(height: 48),
+                        FilledButton.icon(
+                          onPressed: _start,
+                          icon: const Icon(Icons.near_me_outlined),
+                          label: const Text('Commencer'),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Voir les offres autour de vous, sans compte',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppColors.textMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        OutlinedButton(
                           onPressed: () => context.push(AppRoutes.login),
-                          child: const Text('Se connecter'),
+                          child: const Text('Déjà un compte ? Se connecter'),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            const Text(
+                              'Vous n’avez pas de compte ?',
+                              style: TextStyle(color: AppColors.textMuted),
+                            ),
+                            TextButton(
+                              onPressed: () => context.push(AppRoutes.register),
+                              child: const Text('S’inscrire'),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Leaf extends StatelessWidget {
+  const _Leaf({required this.size, required this.angle, required this.alpha});
+
+  final double size;
+  final double angle;
+  final double alpha;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Transform.rotate(
+        angle: angle,
+        child: Icon(
+          Icons.eco,
+          size: size,
+          color: AppColors.leaf.withValues(alpha: alpha),
         ),
       ),
     );

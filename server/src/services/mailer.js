@@ -82,6 +82,7 @@ async function sendWithFirebase({ to, subject, text, html }) {
   await mailStore.add({
     to,
     ...(config.mail.from ? { from: config.mail.from } : {}),
+    ...(config.mail.replyTo ? { replyTo: config.mail.replyTo } : {}),
     message: { subject, text, ...(html ? { html } : {}) },
     created_at: new Date(),
   });
@@ -89,7 +90,14 @@ async function sendWithFirebase({ to, subject, text, html }) {
 
 async function sendWithSmtp({ to, subject, text, html }) {
   try {
-    await smtpTransport().sendMail({ from: config.smtp.from, to, subject, text, html });
+    await smtpTransport().sendMail({
+      from: config.smtp.from,
+      ...(config.mail.replyTo ? { replyTo: config.mail.replyTo } : {}),
+      to,
+      subject,
+      text,
+      html,
+    });
   } catch (error) {
     // Identifiants refusés, serveur injoignable… : le détail reste dans la
     // console, l'application reçoit un message compréhensible.

@@ -1,4 +1,4 @@
-﻿name: repo_partage_plus
+name: repo_partage_plus
 description: "A new Flutter project."
 publish_to: 'none'
 
@@ -39,8 +39,11 @@ dependencies:
   sembast: 3.8.11
   sembast_web: 2.4.6
   path_provider: 2.1.6
-  connectivity_plus: 7.3.1
+
   uuid: 4.6.0
+
+  # Scan QR Code
+  mobile_scanner: ^7.4.2
 
   # Authentification
   firebase_core: 4.15.0
@@ -48,7 +51,7 @@ dependencies:
 
   # Itineraire vers le lieu de retrait dans OsmAnd (cartes hors ligne)
   android_intent_plus: 6.1.0
-  url_launcher: 6.3.2
+  url_launcher: 6.3.3
   rodiumai: ^0.1.1
 
   # Recommandations : affinage par IA via Cloud Functions, preferences dictees
@@ -56,11 +59,15 @@ dependencies:
   speech_to_text: 7.5.0
   firebase_ai: ^4.0.0
   firebase_messaging: ^16.7.0
-  firebase_storage: ^13.6.0
   image_picker: ^1.2.3
 
   # Graphiques (tableau de bord d'impact)
   fl_chart: 1.2.0
+
+  # QR code du retrait (montré par le bénéficiaire, scanné par le donateur)
+  qr_flutter: ^4.1.0
+  connectivity_plus: ^7.3.1
+  record: ^7.1.1
 
 dev_dependencies:
   flutter_test:
@@ -71,4 +78,4 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/
+  - assets/images/

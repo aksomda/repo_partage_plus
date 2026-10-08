@@ -18,6 +18,32 @@ bool isOfferAvailable(Json offer, DateTime now) {
       !DateTime.parse(offer['expiry_date'] as String).isBefore(today);
 }
 
+/// Problème de dates d'une publication, ou null si tout va bien (mêmes
+/// règles que le serveur) : chaque créneau se termine dans le futur, et au
+/// plus tard le jour de la date limite [expiry].
+String? pickupDatesError(
+  Iterable<DateTime> slotEnds,
+  DateTime expiry, {
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  final limit = DateTime(expiry.year, expiry.month, expiry.day + 1);
+  if (!limit.isAfter(at)) return 'La date limite est déjà passée';
+  if (slotEnds.any((end) => !end.isAfter(at))) {
+    return 'Le retrait doit se terminer dans le futur : choisissez une heure '
+        'de fin plus tardive';
+  }
+  if (slotEnds.any((end) => end.isAfter(limit))) {
+    return 'Le retrait doit se terminer au plus tard le jour de la date '
+        'limite : avancez le créneau ou repoussez la date limite';
+  }
+  return null;
+}
+
+/// Offre publiée sans compte : pas de réservation, on appelle le donateur.
+bool isGuestOffer(Json offer) =>
+    offer['is_guest'] == 1 || offer['is_guest'] == true;
+
 /// Retire des quantités affichées ce que l'utilisateur a réservé hors ligne.
 List<Json> applyPendingReservations(
   List<Json> offers,
@@ -165,6 +191,15 @@ final offerDetailProvider = FutureProvider.autoDispose.family<Json, int>((
   }
 });
 
+/// Risque de gaspillage et suggestions, par id d'offre du donateur
+/// (calculés par le serveur, copiés à chaque synchronisation).
+final offerInsightsProvider = Provider<Map<Object?, Json>>(
+  (ref) => {
+    for (final insight in ref.watch(snapshotListProvider('offer_insights')))
+      insight['offer_id']: insight,
+  },
+);
+
 final categoriesProvider = Provider<List<Json>>(
   (ref) => ref.watch(snapshotListProvider('categories')),
 );
@@ -221,6 +256,24 @@ class OffersRepository {
         body: offer,
         targetId: offerId,
         label: 'Modification de « ${offer['title']} »',
+      ),
+    );
+  }
+
+  /// Créneaux d'une offre publiée, réservée ou non (voir PATCH /slots).
+  Future<SubmitResult> updateSlots(
+    int offerId,
+    String title,
+    List<Map<String, Object?>> slots,
+  ) {
+    return _sync.submit(
+      PendingAction(
+        kind: 'offer.slots',
+        method: 'PATCH',
+        path: ApiEndpoints.offerSlots(offerId),
+        body: {'slots': slots},
+        targetId: offerId,
+        label: 'Créneaux de « $title »',
       ),
     );
   }

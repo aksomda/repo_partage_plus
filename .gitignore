@@ -44,3 +44,7 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 /android/build/reports/problems/problems-report.html
+
+.env
+server/node_modules/
+**server/node_modules/

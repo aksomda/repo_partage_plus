@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
@@ -8,7 +9,10 @@ import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/impact/data/impact_repository.dart';
+import 'package:repo_partage_plus/features/impact/domain/impact_csv.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/core/widgets/app_menu.dart';
+import 'package:repo_partage_plus/core/router/app_routes.dart';
 
 /// Tableau de bord « Mon impact » : compteurs, indicateurs sociaux,
 /// évolution sur 12 mois et répartition par catégorie. Lu sur l'appareil :
@@ -21,6 +25,8 @@ class ImpactScreen extends ConsumerStatefulWidget {
 }
 
 class _ImpactScreenState extends ConsumerState<ImpactScreen> {
+  var _period = ImpactPeriod.all;
+
   @override
   void initState() {
     super.initState();
@@ -44,12 +50,48 @@ class _ImpactScreenState extends ConsumerState<ImpactScreen> {
     }
   }
 
+  /// Copie le tableau d'impact au format CSV dans le presse-papiers.
+  Future<void> _copyCsv() async {
+    final csv = impactCsv(
+      title: 'Mon impact sur Partage+',
+      impact: ref.read(myImpactProvider) ?? const {},
+      social: ref.read(myImpactSocialProvider) ?? const {},
+      monthly: ref.read(myImpactMonthlyProvider),
+      byCategory: ref.read(myImpactByCategoryProvider),
+      socialLabels: const {
+        'offers_shared': 'Offres partagées',
+        'pickups_given': 'Retraits donnés',
+        'people_helped': 'Personnes aidées',
+        'associations_supported': 'Associations soutenues',
+        'pickups_received': 'Retraits reçus',
+        'donors_met': 'Donateurs rencontrés',
+        'free_received': 'Dons gratuits reçus',
+      },
+    );
+    await Clipboard.setData(ClipboardData(text: csv));
+    if (mounted) {
+      showMessage(context, 'Tableau copié : collez-le dans Excel ou Sheets');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final impact = ref.watch(myImpactProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mon impact')),
+      drawer: const AppMenu(currentLocation: AppRoutes.impact),
+      appBar: AppBar(
+        leading: backOrMenuButton(context),
+        title: const Text('Mon impact'),
+        actions: [
+          if (impact != null)
+            IconButton(
+              tooltip: 'Copier en CSV (Excel, Sheets)',
+              icon: const Icon(Icons.table_view_outlined),
+              onPressed: _copyCsv,
+            ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: impact == null
@@ -66,14 +108,26 @@ class _ImpactScreenState extends ConsumerState<ImpactScreen> {
                         children: [
                           const _DataStatus(),
                           const SizedBox(height: 12),
-                          _Counters(impact: impact),
+                          _PeriodChips(
+                            selected: _period,
+                            onSelected: (period) =>
+                                setState(() => _period = period),
+                          ),
+                          const SizedBox(height: 12),
+                          _Counters(
+                            impact: impactForPeriod(
+                              _period,
+                              total: impact,
+                              monthly: ref.watch(myImpactMonthlyProvider),
+                            ),
+                          ),
                           const _SocialSection(),
-                          const _SectionTitle('Évolution sur 12 mois'),
-                          const _MonthlyChart(),
                           const _SectionTitle(
                             'Répartition des produits sauvés',
                           ),
-                          const _CategoryChart(),
+                          const _ChartCard(child: _CategoryChart()),
+                          const _SectionTitle('Évolution sur 12 mois'),
+                          const _ChartCard(child: _MonthlyChart()),
                         ],
                       ),
                     ),
@@ -81,6 +135,74 @@ class _ImpactScreenState extends ConsumerState<ImpactScreen> {
                 ],
               ),
       ),
+    );
+  }
+}
+
+/// Période des compteurs (maquette) ; le serveur donne le total et les
+/// 12 derniers mois.
+enum ImpactPeriod {
+  month('Ce mois'),
+  year('Cette année'),
+  all('Total');
+
+  const ImpactPeriod(this.label);
+
+  final String label;
+}
+
+/// Compteurs de la période : total, ou somme des mois concernés.
+Json impactForPeriod(
+  ImpactPeriod period, {
+  required Json total,
+  required List<Json> monthly,
+  DateTime? now,
+}) {
+  if (period == ImpactPeriod.all) return total;
+  final at = now ?? DateTime.now();
+  final month = '${at.year}-${at.month.toString().padLeft(2, '0')}';
+  final months = [
+    for (final m in monthly)
+      if (period == ImpactPeriod.month
+          ? m['month'] == month
+          : '${m['month']}'.startsWith('${at.year}-'))
+        m,
+  ];
+  return {
+    for (final key in const [
+      'pickups',
+      'items',
+      'food_kg',
+      'co2_kg',
+      'meals',
+      'estimated_pickups',
+    ])
+      key: months.fold<num>(0, (sum, m) => sum + (m[key] as num? ?? 0)),
+  };
+}
+
+class _PeriodChips extends StatelessWidget {
+  const _PeriodChips({required this.selected, required this.onSelected});
+
+  final ImpactPeriod selected;
+  final ValueChanged<ImpactPeriod> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      children: [
+        for (final period in ImpactPeriod.values)
+          ChoiceChip(
+            label: Text(period.label),
+            selected: period == selected,
+            labelStyle: TextStyle(
+              color: period == selected ? Colors.white : AppColors.text,
+              fontWeight: FontWeight.w600,
+            ),
+            onSelected: (_) => onSelected(period),
+          ),
+      ],
     );
   }
 }
@@ -119,7 +241,7 @@ class _DataStatus extends ConsumerWidget {
     final (asOf, source) = ref.watch(myImpactAsOfProvider);
     final online = ref.watch(syncControllerProvider.select((s) => s.online));
     final parts = [
-      if (asOf != null) 'Chiffres du ${formatDay(asOf)} à ${formatHour(asOf)}',
+      if (asOf != null) '${_figuresOf(asOf)} à ${formatHour(asOf)}',
       if (!online) 'hors ligne',
       if (source == 'firestore') 'copie de secours',
     ];
@@ -141,6 +263,12 @@ class _DataStatus extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// « Chiffres d'aujourd'hui », « Chiffres d'hier », « Chiffres du 02/10 ».
+String _figuresOf(DateTime date) {
+  final day = formatDay(date);
+  return day.contains('/') ? 'Chiffres du $day' : 'Chiffres d’$day';
 }
 
 class _SectionTitle extends StatelessWidget {
@@ -195,10 +323,12 @@ class _Counters extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pickups = impact['pickups'] as num? ?? 0;
+    final estimated = impact['estimated_pickups'] as num? ?? 0;
     return _CardGrid(
       children: [
         _StatCard(
           icon: Icons.shopping_bag_outlined,
+          color: AppColors.primary,
           label: 'Produits sauvés',
           value: formatNumber(impact['items'] as num? ?? 0),
           detail: pickups <= 1
@@ -207,16 +337,23 @@ class _Counters extends StatelessWidget {
         ),
         _StatCard(
           icon: Icons.delete_outline,
+          color: AppColors.accent,
           label: 'Gaspillage évité',
           value: '${formatNumber(impact['food_kg'] as num?, decimals: 1)} kg',
+          // Poids non indiqué par le publieur : estimé d'après l'unité.
+          detail: estimated > 0
+              ? 'dont ${formatNumber(estimated)} retrait${estimated > 1 ? 's' : ''} estimé${estimated > 1 ? 's' : ''}'
+              : null,
         ),
         _StatCard(
           icon: Icons.eco_outlined,
+          color: AppColors.leaf,
           label: 'CO₂ évité',
           value: '${formatNumber(impact['co2_kg'] as num?, decimals: 1)} kg',
         ),
         _StatCard(
           icon: Icons.restaurant_outlined,
+          color: Color(0xFF2F6FB0),
           label: 'Repas équivalents',
           value: formatNumber(impact['meals'] as num?),
         ),
@@ -296,40 +433,68 @@ class _StatCard extends StatelessWidget {
     required this.label,
     required this.value,
     this.detail,
+    this.color = AppColors.primary,
   });
 
   final IconData icon;
   final String label;
   final String value;
   final String? detail;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
+    // Pastille d'icône à gauche, chiffre et libellé à droite (maquette).
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+        padding: const EdgeInsets.all(14),
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: AppColors.primary),
-            const SizedBox(height: 8),
-            Text(
-              value,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(label, style: const TextStyle(color: AppColors.textMuted)),
-            if (detail != null)
-              Text(
-                detail!,
-                style: const TextStyle(
-                  color: AppColors.textMuted,
-                  fontSize: 12,
-                ),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                shape: BoxShape.circle,
               ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      value,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 13,
+                    ),
+                  ),
+                  if (detail != null)
+                    Text(
+                      detail!,
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -476,16 +641,16 @@ class _CategoryChart extends ConsumerWidget {
       child: PieChart(
         PieChartData(
           sectionsSpace: 2,
-          centerSpaceRadius: 40,
+          centerSpaceRadius: 52,
           sections: [
             for (var i = 0; i < categories.length; i++)
               PieChartSectionData(
                 value: kg(categories[i]),
                 color: _colors[i % _colors.length],
                 title: share(categories[i]),
-                radius: 56,
+                radius: 40,
                 titleStyle: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.bold,
                   color: Colors.white,
                 ),
@@ -557,6 +722,20 @@ class _ChartPlaceholder extends StatelessWidget {
           style: const TextStyle(color: AppColors.textMuted),
         ),
       ),
+    );
+  }
+}
+
+class _ChartCard extends StatelessWidget {
+  const _ChartCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
     );
   }
 }

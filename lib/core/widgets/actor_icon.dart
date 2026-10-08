@@ -22,7 +22,7 @@ IconData actorIconData(String? name) =>
 const permissionLabels = <String, String>{
   'beneficiary': 'Récupère des produits',
   'donor': 'Publie des produits',
-  'association': 'Association (validation requise)',
+  'association': 'Association : récupère des produits pour d’autres',
   'admin': 'Administrateur',
 };
 

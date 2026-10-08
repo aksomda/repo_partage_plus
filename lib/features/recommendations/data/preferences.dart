@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/network/api_client.dart';
 import 'package:repo_partage_plus/core/offline/offline_data.dart';
 import 'package:repo_partage_plus/core/storage/local_store.dart';
+import 'package:repo_partage_plus/features/auth/data/auth_repository.dart';
+import 'package:repo_partage_plus/features/auth/data/profile_repository.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
 /// Préférences de recommandation, gardées sur l'appareil.
@@ -72,21 +76,84 @@ class RecoPreferences {
 class RecoPreferencesController extends Notifier<RecoPreferences> {
   static const _key = 'reco_preferences';
 
+  /// Compte dont les préférences ont déjà été réconciliées avec l'appareil.
+  static const _accountKey = 'reco_account';
+
+  /// Préférences enregistrées sur cet appareil.
+  var _savedLocally = false;
+
   @override
   RecoPreferences build() {
     Future.microtask(() async {
       final saved = await ref
           .read(localStoreProvider)
           .readSetting<Object?>(_key);
-      if (saved != null) state = RecoPreferences.fromMap(saved);
+      if (saved != null) {
+        _savedLocally = true;
+        state = RecoPreferences.fromMap(saved);
+      }
+      await _syncAccount();
     });
+    // Connexion, nouvel appareil, ou préférences changées ailleurs.
+    ref.listen<Json>(accountPreferencesProvider, (_, _) => _syncAccount());
+    // Déconnexion : la base locale est vidée, les préférences aussi.
+    ref.listen<String?>(authTokenProvider, (_, token) {
+      if (token == null) {
+        _savedLocally = false;
+        state = const RecoPreferences();
+      }
+    });
+    ref.onDispose(() => _upload?.cancel());
     return const RecoPreferences();
   }
 
+  /// Première fois avec ce compte sur l'appareil : les préférences réglées
+  /// ici (sans compte) sont recopiées dans le compte, sinon celles du compte
+  /// sont reprises. Ensuite, le compte fait foi : un réglage fait sur un
+  /// autre appareil arrive ici à la synchronisation.
+  Future<void> _syncAccount() async {
+    final accountId = ref.read(profileProvider)?['id'];
+    if (ref.read(authTokenProvider) == null || accountId == null) return;
+    // Modification locale pas encore envoyée : ne pas l'écraser.
+    if (_upload?.isActive ?? false) return;
+
+    final store = ref.read(localStoreProvider);
+    final account = ref.read(accountPreferencesProvider)['reco'];
+    if (await store.readSetting<Object?>(_accountKey) != accountId) {
+      await store.saveSetting(_accountKey, accountId);
+      if (_savedLocally) {
+        _scheduleUpload();
+        return;
+      }
+    }
+    if (account is Map) {
+      state = RecoPreferences.fromMap(account);
+      await store.saveSetting(_key, state.toMap());
+    }
+  }
+
+  /// Enregistrée sur l'appareil et, avec un compte, sur le serveur.
   Future<void> update(RecoPreferences preferences) async {
     state = preferences;
+    _savedLocally = true;
     await ref.read(localStoreProvider).saveSetting(_key, preferences.toMap());
+    if (ref.read(authTokenProvider) == null) return;
+    _scheduleUpload();
   }
+
+  /// Plusieurs choix d'affilée : un seul envoi, après le dernier.
+  void _scheduleUpload() {
+    _upload?.cancel();
+    _upload = Timer(uploadDelay, () {
+      ref.read(profileRepositoryProvider).savePreferences({
+        'reco': state.toMap(),
+      });
+    });
+  }
+
+  /// Délai avant l'envoi au serveur des préférences modifiées.
+  static const uploadDelay = Duration(seconds: 2);
+  Timer? _upload;
 }
 
 final recoPreferencesProvider =

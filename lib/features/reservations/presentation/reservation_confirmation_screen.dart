@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/maps/osmand_button.dart';
@@ -11,6 +12,7 @@ import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
 import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widgets.dart';
 import 'package:repo_partage_plus/features/offers/presentation/widgets/offer_widgets.dart';
+import 'package:repo_partage_plus/features/pickup/domain/pickup_qr.dart';
 import 'package:repo_partage_plus/features/reservations/data/reservations_repository.dart';
 
 /// Réservation (compte ou invité) retrouvée dans les données de l'appareil.
@@ -190,9 +192,26 @@ class _SummaryState extends ConsumerState<_Summary> {
                 ],
               ),
             ),
+            const SizedBox(height: 12),
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(AppTheme.radius),
+                ),
+                child: QrImageView(
+                  key: const ValueKey('pickup-qr'),
+                  data: pickupQrData(_r['id'], code),
+                  size: 180,
+                  semanticsLabel: 'QR code de retrait',
+                ),
+              ),
+            ),
             const SizedBox(height: 6),
             const Text(
-              'Présentez ce code au donateur lors du retrait.',
+              'Présentez ce code ou ce QR code au donateur lors du retrait.',
               style: TextStyle(color: AppColors.textMuted),
             ),
             const SizedBox(height: 20),

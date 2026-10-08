@@ -7,6 +7,9 @@ abstract final class AppRoutes {
   static const splash = '/';
   static const login = '/login';
   static const register = '/register';
+  static const forgotPassword = '/forgot-password';
+  static String forgotPasswordFor(String email) =>
+      Uri(path: forgotPassword, queryParameters: {'email': email}).toString();
   static const verifyEmail = '/verify-email';
   static String verifyEmailFor(String email) =>
       Uri(path: verifyEmail, queryParameters: {'email': email}).toString();
@@ -16,13 +19,17 @@ abstract final class AppRoutes {
   static const home = '/home';
   static const nearbyMap = '/discovery/map';
   static const search = '/discovery/search';
+  static const filters = '/discovery/filters';
   static const pickLocation = '/discovery/location';
+  static const offline = '/offline';
 
   // Offres
   static const myOffers = '/offers/mine';
   static const createOffer = '/offers/new';
   static const offerDetail = '/offers/:id';
   static String offer(String id) => '/offers/$id';
+  static const editOfferPattern = '/offers/:id/edit';
+  static String editOffer(Object id) => '/offers/$id/edit';
   static const reservePattern = '/offers/:id/reserve';
   static String reserve(Object id) => '/offers/$id/reserve';
 
@@ -37,6 +44,19 @@ abstract final class AppRoutes {
 
   // Notifications, impact, recommandations
   static const notifications = '/notifications';
+  static const messages = '/notifications/messages';
+  static const teamMessages = '/notifications/messages/team';
+  static const directConversationPattern =
+      '/notifications/messages/user/:peerId';
+
+  /// Échange avec un autre utilisateur ; [offerId] : offre dont on parle.
+  static String directConversation(int peerId, {int? offerId}) => Uri(
+    path: '/notifications/messages/user/$peerId',
+    queryParameters: offerId == null ? null : {'offer': '$offerId'},
+  ).toString();
+  static const conversationPattern = '/notifications/conversation/:userId';
+  static String conversation(int userId) =>
+      '/notifications/conversation/$userId';
   static const impact = '/impact';
   static const recommendations = '/recommendations';
 
@@ -44,19 +64,27 @@ abstract final class AppRoutes {
   static const adminDashboard = '/admin';
   static const adminOffers = '/admin/offers';
   static const adminAccounts = '/admin/accounts';
-  static const adminAssociations = '/admin/associations';
   static const adminCategories = '/admin/categories';
   static const adminFactors = '/admin/factors';
   static const adminActors = '/admin/actors';
+  static const adminSettings = '/admin/settings';
+  static const adminReservations = '/admin/reservations';
+  static const adminImpact = '/admin/impact';
+  static const adminManage = '/admin/manage';
 
   /// Écrans réservés aux comptes connectés : redirigés vers la connexion.
   static bool requiresLogin(String path) =>
       path == profile ||
       path == notifications ||
+      path.startsWith('/notifications/') ||
       path == impact ||
       path.startsWith('/pickup/') ||
       path == adminDashboard ||
       path.startsWith('/admin/');
+
+  /// Écrans réservés aux administrateurs.
+  static bool requiresAdmin(String path) =>
+      path == adminDashboard || path.startsWith('/admin/');
 
   static String loginThen(String from) =>
       Uri(path: login, queryParameters: {'from': from}).toString();
@@ -68,44 +96,3 @@ abstract final class AppRoutes {
   static String homeFor(Object? profile) =>
       profile is Map && profile['role'] == 'admin' ? adminAccounts : home;
 }
-
-/// Entrée du menu de développement listant tous les écrans.
-class RouteMenuEntry {
-  const RouteMenuEntry(this.title, this.location);
-
-  final String title;
-  final String location;
-}
-
-/// Tous les écrans déclarés, utilisé par le menu placeholder et les tests.
-final List<RouteMenuEntry> allRouteEntries = [
-  const RouteMenuEntry('Démarrage', AppRoutes.splash),
-  const RouteMenuEntry('Connexion', AppRoutes.login),
-  const RouteMenuEntry('Inscription', AppRoutes.register),
-  const RouteMenuEntry('Activation du compte', AppRoutes.verifyEmail),
-  const RouteMenuEntry('Profil', AppRoutes.profile),
-  const RouteMenuEntry('Accueil', AppRoutes.home),
-  const RouteMenuEntry('Offres à proximité', AppRoutes.nearbyMap),
-  const RouteMenuEntry('Recherche', AppRoutes.search),
-  const RouteMenuEntry('Point de départ', AppRoutes.pickLocation),
-  const RouteMenuEntry('Mes offres', AppRoutes.myOffers),
-  const RouteMenuEntry('Publier une offre', AppRoutes.createOffer),
-  RouteMenuEntry("Détail de l'offre", AppRoutes.offer('1')),
-  RouteMenuEntry('Réserver', AppRoutes.reserve(1)),
-  const RouteMenuEntry('Mes réservations', AppRoutes.myReservations),
-  RouteMenuEntry('Confirmation de réservation', AppRoutes.confirmation('1')),
-  RouteMenuEntry('Retrait', AppRoutes.pickup('1')),
-  const RouteMenuEntry('Notifications', AppRoutes.notifications),
-  const RouteMenuEntry('Mon impact', AppRoutes.impact),
-  const RouteMenuEntry('Recommandations', AppRoutes.recommendations),
-  const RouteMenuEntry('Administration', AppRoutes.adminDashboard),
-  const RouteMenuEntry('Modération des offres', AppRoutes.adminOffers),
-  const RouteMenuEntry('Modération des comptes', AppRoutes.adminAccounts),
-  const RouteMenuEntry(
-    'Validation des associations',
-    AppRoutes.adminAssociations,
-  ),
-  const RouteMenuEntry('Catégories', AppRoutes.adminCategories),
-  const RouteMenuEntry('Facteurs', AppRoutes.adminFactors),
-  const RouteMenuEntry('Acteurs', AppRoutes.adminActors),
-];

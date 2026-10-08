@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:repo_partage_plus/core/countries/country_widgets.dart';
 import 'package:repo_partage_plus/core/guest/guest_repository.dart';
 import 'package:repo_partage_plus/core/router/app_routes.dart';
 import 'package:repo_partage_plus/core/theme/app_theme.dart';
@@ -12,19 +12,19 @@ import 'package:repo_partage_plus/features/auth/presentation/widgets/auth_widget
 class GuestFieldsController {
   final firstName = TextEditingController();
   final lastName = TextEditingController();
-  final phone = TextEditingController();
+  final phone = PhoneController();
 
   GuestIdentity get value => GuestIdentity(
     firstName: firstName.text.trim(),
     lastName: lastName.text.trim(),
-    phone: phone.text.trim(),
+    phone: phone.value,
   );
 
   void fill(GuestIdentity? identity) {
     if (identity == null || firstName.text.isNotEmpty) return;
     firstName.text = identity.firstName;
     lastName.text = identity.lastName;
-    phone.text = identity.phone;
+    phone.value = identity.phone;
   }
 
   void dispose() {
@@ -42,6 +42,7 @@ class GuestFields extends ConsumerWidget {
     required this.controller,
     required this.notice,
     this.returnTo,
+    this.extraField,
   });
 
   final GuestFieldsController controller;
@@ -49,6 +50,9 @@ class GuestFields extends ConsumerWidget {
 
   /// Écran où revenir après une connexion proposée ici.
   final String? returnTo;
+
+  /// Champ ajouté après le téléphone (ex. : e-mail de l'offre).
+  final Widget? extraField;
 
   static String? _name(String? value) =>
       (value?.trim().length ?? 0) < 2 ? '2 caractères minimum' : null;
@@ -108,20 +112,12 @@ class GuestFields extends ConsumerWidget {
             LabeledField(
               label: 'Téléphone',
               required: true,
-              child: TextFormField(
+              child: PhoneField(
                 controller: controller.phone,
-                keyboardType: TextInputType.phone,
-                textInputAction: TextInputAction.next,
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
-                ],
-                decoration: const InputDecoration(hintText: '+226 70 00 00 00'),
-                validator: (value) =>
-                    RegExp(r'^\+?[0-9 ]{8,20}$').hasMatch(value?.trim() ?? '')
-                    ? null
-                    : 'Numéro invalide',
+                requiredMessage: 'Téléphone obligatoire',
               ),
             ),
+            ?extraField,
           ],
         ),
       ],

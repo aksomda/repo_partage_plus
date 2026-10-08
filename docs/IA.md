@@ -101,8 +101,77 @@ local. Serveur : renseigner `RODIUM_API_KEY` dans `server/.env` (et sur Render).
 La fonction est déployée en `europe-west1` (même région dans l'application :
 `CloudFunctionAiRefiner.region`).
 
+## Publication express (restaurateurs)
+
+En haut de « Publier une offre », les comptes **restaurateur** (acteur
+`restaurateur`) voient une carte « Publication express » : ils décrivent leurs
+invendus en une phrase (texte ou dictée), par exemple « 5 plats de riz gras,
+gratuit, avant 20h », et le formulaire est pré-rempli : catégorie, titre,
+description, quantité, unité, poids, prix, DLC, créneau. **Rien n'est publié** :
+le restaurateur relit, corrige, puis publie comme d'habitude.
+
+- Route : `POST /api/recommendations/offer-draft` (`server/src/services/offer_draft.js`),
+  refusée (403) aux autres acteurs, même plafond `AI_CALLS_PER_HOUR`.
+- L'application envoie le texte et son heure locale ; le modèle ne renvoie
+  que des heures « HH:MM » et un nombre de jours, convertis en dates sur
+  l'appareil (`draftDates`).
+- Réponse contrôlée : catégorie prise dans la liste MySQL (sinon ignorée),
+  quantité, poids, prix et DLC bornés, textes tronqués ; un champ douteux est
+  laissé tel quel dans le formulaire.
+- IA absente, en panne ou quota atteint : message, et le formulaire classique
+  reste utilisable.
+
+## Recherche à la voix (écran Recommandations)
+
+Le micro enregistre la demande (« je veux du riz gras »). Un agent IA la
+retranscrit, puis ne garde que les offres qui y répondent ; la retranscription
+s'affiche dans le champ et un bandeau « Tout afficher » retire le filtre. Une
+demande tapée au clavier (bouton « Recommander ») passe par le même agent.
+
+Agents essayés dans l'ordre (le premier qui répond l'emporte) :
+
+1. **IA ouverte du serveur** — `POST /api/recommendations/voice-search` :
+   Whisper (retranscription) puis Llama (filtrage), via une API compatible
+   OpenAI. **Groq** par défaut (palier gratuit). Toutes les plateformes.
+2. **Gemini** (Firebase AI Logic) — Android et iOS, si le projet a des crédits.
+3. **Mots-clés sur l'appareil** — toujours disponible, hors ligne compris
+   (demande écrite ou dictée par la reconnaissance vocale du système).
+
+L'application n'envoie que l'audio et les **id** des offres (avec leur
+distance) : le serveur relit titres, prix et dates dans MySQL. Même limite
+d'appels que l'IA de recommandation (`AI_CALLS_PER_HOUR`).
+
+### Mise en service (serveur)
+
+1. Créer une clé gratuite sur https://console.groq.com/keys (`gsk_…`).
+2. Dans `server/.env` : `GROQ_API_KEY=gsk_…`, puis redémarrer l'API.
+3. Facultatif : autre service compatible OpenAI avec `VOICE_AI_BASE_URL`,
+   `VOICE_AI_STT_MODEL`, `VOICE_AI_LLM_MODEL` et `VOICE_AI_LABEL` (nom affiché).
+   Ex. Ollama en local (`http://localhost:11434/v1`) pour le filtrage d'une
+   demande écrite ; la retranscription demande un service Whisper.
+
+Sans clé, la route répond 503 et l'application passe à Gemini, puis aux
+mots-clés.
+
+### Par plateforme
+
+| Plateforme | Enregistrement | À configurer |
+|---|---|---|
+| Android | AAC (m4a) | Rien : permission `RECORD_AUDIO` déjà déclarée |
+| iOS | AAC (m4a) | Rien : `NSMicrophoneUsageDescription` déjà dans `Info.plist` |
+| macOS | AAC (m4a) | Rien : entitlement `device.audio-input` et `Info.plist` déjà en place |
+| Windows | AAC (m4a) | Autoriser le micro aux applications de bureau (Paramètres → Confidentialité → Microphone) |
+| Linux | AAC (m4a) | Installer les outils d'enregistrement : `sudo apt install pulseaudio-utils ffmpeg` |
+| Web | Opus (WebM) | Servir l'application en **HTTPS** (ou `localhost`) : le navigateur refuse le micro sinon ; ajouter l'origine du site à `CORS_ORIGINS` si cette variable est renseignée |
+
+Sur Linux et Windows, la dictée du système n'existe pas : sans enregistrement
+possible, la demande se tape au clavier.
+
 ## Sécurité et confidentialité
 
+- Recherche à la voix : l'enregistrement est envoyé au service d'IA configuré
+  (Groq par défaut, ou Google pour Gemini) pour être retranscrit, puis le
+  fichier temporaire est supprimé de l'appareil.
 - La clé RodiumAI reste côté serveur (Secret Manager). L'application n'appelle que
   la fonction, avec une session Firebase.
 - Recommandé ensuite : **Firebase App Check**, puis `enforceAppCheck: true` dans

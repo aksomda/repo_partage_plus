@@ -1,15 +1,22 @@
+import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { pool, query, transaction } from '../db/pool.js';
+import { isDatabaseUnavailable, pool, query, transaction } from '../db/pool.js';
 import { authenticate, requireRole } from '../http/auth.js';
 import { HttpError, notFound } from '../http/errors.js';
 import { id, idParam, pagination, reason } from '../http/validation.js';
 import { firebase } from '../services/firebase.js';
+import { markFirebaseSync } from '../services/firebase_sync.js';
 import { firestoreMirror } from '../services/firestore_mirror.js';
 import { runScheduledJobs } from '../services/jobs.js';
+import { sendMail } from '../services/mailer.js';
 import { notify } from '../services/notifications.js';
 import { OFFER_SELECT } from '../services/offers.js';
+import { loadSettings, saveSettings, settingsSchema } from '../services/settings.js';
+import { BCRYPT_ROUNDS, email, password } from './auth.js';
+import { buildGlobalImpact } from './impact.js';
+import { forViewer, releaseQuantity, RESERVATION_SELECT } from './reservations.js';
 
 export const adminRouter = Router();
 
@@ -24,16 +31,47 @@ const decisionSchema = z
 
 // ---------- Tableau de bord ----------
 
-adminRouter.get('/stats', async (req, res) => {
+/** Compteurs du tableau de bord et de la page Administration. */
+export async function loadStats() {
   const [stats] = await query(`
     SELECT
       (SELECT COUNT(*) FROM offers WHERE status = 'pending') AS offers_pending,
       (SELECT COUNT(*) FROM offers WHERE status = 'published') AS offers_published,
-      (SELECT COUNT(*) FROM associations WHERE status = 'pending') AS associations_pending,
       (SELECT COUNT(*) FROM users WHERE status = 'suspended') AS users_suspended,
       (SELECT COUNT(*) FROM users WHERE role <> 'admin') AS users_total,
-      (SELECT COUNT(*) FROM reservations WHERE status = 'picked_up') AS pickups_total`);
-  res.json(stats);
+      (SELECT COUNT(*) FROM reservations WHERE status = 'picked_up') AS pickups_total,
+      (SELECT COUNT(*) FROM reservations WHERE status IN ('pending', 'confirmed')) AS reservations_open,
+      (SELECT COUNT(*) FROM actors) AS actors_total,
+      (SELECT COUNT(*) FROM categories) AS categories_total,
+      (SELECT COUNT(*) FROM impact_factors) AS factors_total`);
+  return Object.fromEntries(Object.entries(stats).map(([key, value]) => [key, Number(value)]));
+}
+
+adminRouter.get('/stats', async (req, res) => {
+  res.json(await loadStats());
+});
+
+// ---------- Réservations (toute la plateforme, lecture seule) ----------
+
+const reservationFilters = pagination.extend({
+  status: z.enum(['pending', 'confirmed', 'picked_up', 'cancelled']).optional(),
+});
+
+adminRouter.get('/reservations', async (req, res) => {
+  const filters = reservationFilters.parse(req.query);
+  const rows = await query(
+    `${RESERVATION_SELECT} ${filters.status ? 'WHERE r.status = ?' : ''}
+     ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
+    [...(filters.status ? [filters.status] : []), filters.limit, filters.offset],
+  );
+  // Le code de retrait reste réservé au bénéficiaire.
+  res.json(rows.map((row) => forViewer(row, req.user)));
+});
+
+// ---------- Impact de la plateforme ----------
+
+adminRouter.get('/impact', async (req, res) => {
+  res.json(await buildGlobalImpact());
 });
 
 // ---------- Modération des offres ----------
@@ -41,7 +79,7 @@ adminRouter.get('/stats', async (req, res) => {
 const offerFilters = pagination.extend({
   status: z
     .enum(['pending', 'published', 'rejected', 'reserved', 'completed', 'expired', 'cancelled'])
-    .default('pending'),
+    .default('published'),
 });
 
 adminRouter.get('/offers', async (req, res) => {
@@ -57,7 +95,7 @@ adminRouter.patch('/offers/:id/moderation', async (req, res) => {
   const { id: offerId } = idParam.parse(req.params);
   const { decision, reason: motive } = decisionSchema.parse(req.body);
 
-  await transaction(async (conn) => {
+  const withdrawn = await transaction(async (conn) => {
     const [[offer]] = await conn.query('SELECT * FROM offers WHERE id = ? FOR UPDATE', [
       offerId,
     ]);
@@ -98,18 +136,41 @@ adminRouter.patch('/offers/:id/moderation', async (req, res) => {
 
     await notify(conn, offer.donor_id, {
       type: 'offer_moderated',
-      title: decision === 'approve' ? 'Offre publiée' : 'Offre refusée',
+      title: decision === 'approve' ? 'Offre publiée' : 'Offre retirée',
       body:
         decision === 'approve'
           ? `« ${offer.title} » est maintenant visible.`
-          : `« ${offer.title} » a été refusée : ${motive}`,
+          : `« ${offer.title} » a été retirée par l’administrateur : ${motive}`,
       data: { offer_id: offerId, decision },
     });
+    return decision === 'reject' ? offer : null;
   });
+
+  // Avec ou sans compte : e-mail seulement si le publieur en a laissé un.
+  if (withdrawn) await mailWithdrawal(withdrawn, motive);
 
   const [offer] = await query(`${OFFER_SELECT} WHERE o.id = ?`, [offerId]);
   res.json(offer);
 });
+
+async function mailWithdrawal(offer, motive) {
+  const [contact] = await query('SELECT email FROM offer_contacts WHERE offer_id = ?', [offer.id]);
+  if (!contact) return;
+  try {
+    await sendMail({
+      to: contact.email,
+      subject: `Partage+ : votre offre « ${offer.title} » a été retirée`,
+      text:
+        'Bonjour,\n\n' +
+        `Votre offre « ${offer.title} » a été retirée par l’administrateur de Partage+.\n` +
+        `Motif : ${motive}\n\n` +
+        'Les réservations en cours ont été annulées.',
+    });
+  } catch (error) {
+    // Le retrait est fait : un e-mail perdu ne doit pas l'annuler.
+    console.error(`E-mail de retrait non envoyé à ${contact.email} :`, error.message);
+  }
+}
 
 // ---------- Modération des comptes ----------
 
@@ -120,6 +181,24 @@ const userFilters = pagination.extend({
   q: z.string().trim().max(100).optional(),
 });
 
+export const USER_SELECT = `SELECT u.id, u.name, u.first_name, u.last_name, u.gender, u.age,
+    u.email, u.role, u.actor_id, a.label AS actor_label, u.phone, u.status, u.status_reason,
+    u.email_verified_at, u.created_at, u.updated_at
+  FROM users u LEFT JOIN actors a ON a.id = u.actor_id`;
+
+/** Mêmes filtres que la requête SQL, appliqués à la copie Firestore. */
+function matchesFilters(user, filters) {
+  const q = filters.q?.toLowerCase();
+  return (
+    (!filters.role || user.role === filters.role) &&
+    (!filters.actor_id || Number(user.actor_id) === filters.actor_id) &&
+    (!filters.status || user.status === filters.status) &&
+    (!q || `${user.name ?? ''} ${user.email ?? ''}`.toLowerCase().includes(q))
+  );
+}
+
+// MySQL indisponible : dernière copie des comptes dans Firestore
+// (en-tête X-Data-Source: firestore), pour que l'écran reste utilisable.
 adminRouter.get('/users', async (req, res) => {
   const filters = userFilters.parse(req.query);
   const where = ['1 = 1'];
@@ -142,17 +221,130 @@ adminRouter.get('/users', async (req, res) => {
     params.push(`%${filters.q}%`, `%${filters.q}%`);
   }
 
-  const rows = await query(
-    `SELECT u.id, u.name, u.first_name, u.last_name, u.gender, u.age, u.email, u.role,
-       u.actor_id, a.label AS actor_label, u.phone, u.status, u.status_reason,
-       u.email_verified_at, u.created_at
-     FROM users u LEFT JOIN actors a ON a.id = u.actor_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
-    [...params, filters.limit, filters.offset],
-  );
-  res.json(rows);
+  try {
+    const rows = await query(
+      `${USER_SELECT} WHERE ${where.join(' AND ')}
+       ORDER BY u.created_at DESC LIMIT ? OFFSET ?`,
+      [...params, filters.limit, filters.offset],
+    );
+    res.set('X-Data-Source', 'mysql').json(rows);
+  } catch (error) {
+    if (!isDatabaseUnavailable(error)) throw error;
+    const copy = await firestoreMirror.listUsers().catch(() => null);
+    if (!copy) {
+      throw new HttpError(503, 'Comptes momentanément indisponibles : réessayez plus tard');
+    }
+    const rows = copy
+      .filter((user) => matchesFilters(user, filters))
+      .slice(filters.offset, filters.offset + filters.limit);
+    res.set('X-Data-Source', 'firestore').json(rows);
+  }
 });
+
+/**
+ * Compte créé par l'administrateur : actif d'emblée (pas de code par
+ * e-mail), avec un mot de passe provisoire que l'utilisateur pourra changer
+ * par « Mot de passe oublié ». Créé aussi dans Firebase si disponible.
+ */
+const createUserSchema = z.object({
+  first_name: z.string().trim().min(2).max(80),
+  last_name: z.string().trim().min(2).max(80),
+  email,
+  phone: z
+    .string()
+    .trim()
+    .regex(/^\+?[0-9 ]{8,20}$/, 'Numéro de téléphone invalide')
+    .nullable()
+    .optional(),
+  actor_id: id,
+  password,
+});
+
+adminRouter.post('/users', async (req, res) => {
+  const data = createUserSchema.parse(req.body);
+
+  const [actor] = await query('SELECT * FROM actors WHERE id = ?', [data.actor_id]);
+  if (!actor || !actor.active) throw new HttpError(400, 'Acteur inconnu ou désactivé');
+  // Une association s'inscrit elle-même : ses informations sont à valider.
+  if (actor.permission_role === 'association') {
+    throw new HttpError(400, 'Une association s’inscrit elle-même depuis l’application');
+  }
+
+  const [taken] = await query('SELECT id FROM users WHERE email = ?', [data.email]);
+  if (taken) {
+    throw new HttpError(409, 'Un compte existe déjà avec cette adresse e-mail', {
+      code: 'email_taken',
+    });
+  }
+
+  const name = `${data.first_name} ${data.last_name}`;
+  const firebaseUid = await firebase.createAccount({
+    email: data.email,
+    password: data.password,
+    displayName: name,
+  });
+
+  let result;
+  try {
+    result = await query('INSERT INTO users SET ?', [
+      {
+        name,
+        first_name: data.first_name,
+        last_name: data.last_name,
+        email: data.email,
+        firebase_uid: firebaseUid,
+        password_hash: await bcrypt.hash(data.password, BCRYPT_ROUNDS),
+        role: actor.permission_role,
+        actor_id: actor.id,
+        phone: data.phone ?? null,
+        status: 'active',
+        email_verified_at: new Date(),
+      },
+    ]);
+  } catch (error) {
+    if (error.code !== 'ER_DUP_ENTRY') throw error;
+    throw new HttpError(409, 'Un compte existe déjà avec cette adresse e-mail', {
+      code: 'email_taken',
+    });
+  }
+
+  // Firebase injoignable : compte recopié en arrière-plan.
+  if (!firebaseUid) await markFirebaseSync(result.insertId);
+
+  const [user] = await query(`${USER_SELECT} WHERE u.id = ?`, [result.insertId]);
+  res.status(201).json(user);
+});
+
+/**
+ * Compte désactivé : ses réservations en cours (comme bénéficiaire) et
+ * celles faites sur ses offres (il ne pourrait plus les confirmer) sont
+ * annulées, l'autre partie est prévenue. Ses offres sont masquées tant
+ * qu'il est désactivé (voir DONOR_ACTIVE).
+ */
+async function cancelOpenReservations(conn, userId) {
+  const [open] = await conn.query(
+    `${RESERVATION_SELECT}
+     WHERE (r.beneficiary_id = ? OR o.donor_id = ?) AND r.status IN ('pending', 'confirmed')
+     FOR UPDATE`,
+    [userId, userId],
+  );
+  for (const reservation of open) {
+    await conn.query(
+      "UPDATE reservations SET status = 'cancelled', cancelled_at = NOW() WHERE id = ?",
+      [reservation.id],
+    );
+    await releaseQuantity(conn, reservation);
+    const donorSuspended = reservation.donor_id === userId;
+    await notify(conn, donorSuspended ? reservation.beneficiary_id : reservation.donor_id, {
+      type: 'reservation_cancelled',
+      title: 'Réservation annulée',
+      body: donorSuspended
+        ? `L’offre « ${reservation.offer_title} » n’est plus disponible : le compte du donateur a été désactivé.`
+        : `La réservation de « ${reservation.offer_title} » a été annulée : le compte du bénéficiaire a été désactivé.`,
+      data: { reservation_id: reservation.id, offer_id: reservation.offer_id },
+    });
+  }
+}
 
 const statusSchema = z
   .object({ status: z.enum(['active', 'suspended']), reason })
@@ -169,18 +361,27 @@ adminRouter.patch('/users/:id/status', async (req, res) => {
     throw new HttpError(409, 'Impossible de modifier son propre compte');
   }
 
-  const result = await query(
-    'UPDATE users SET status = ?, status_reason = ? WHERE id = ? AND role <> ?',
-    [data.status, data.status === 'active' ? null : data.reason, userId, 'admin'],
-  );
-  if (result.affectedRows === 0) throw notFound('Compte');
+  await transaction(async (conn) => {
+    // Suspension : les jetons déjà délivrés ne resserviront pas après une
+    // réactivation (token_version augmentée).
+    const [result] = await conn.query(
+      `UPDATE users SET status = ?, status_reason = ?,
+         token_version = token_version + IF(? = 'suspended', 1, 0)
+       WHERE id = ? AND role <> ?`,
+      [data.status, data.status === 'active' ? null : data.reason, data.status, userId, 'admin'],
+    );
+    if (result.affectedRows === 0) throw notFound('Compte');
+    if (data.status === 'suspended') await cancelOpenReservations(conn, userId);
+  });
 
   // Désactivé aussi dans Firebase : plus aucune connexion possible.
   const [{ firebase_uid: firebaseUid }] = await query(
     'SELECT firebase_uid FROM users WHERE id = ?',
     [userId],
   );
-  await firebase.syncDisabled(firebaseUid, data.status === 'suspended');
+  if (!(await firebase.syncDisabled(firebaseUid, data.status === 'suspended'))) {
+    await markFirebaseSync(userId);
+  }
 
   await notify(pool, userId, {
     type: 'account_status',
@@ -276,50 +477,6 @@ adminRouter.delete('/actors/:id', async (req, res) => {
   res.status(204).end();
 });
 
-// ---------- Validation des associations ----------
-
-const associationFilters = pagination.extend({
-  status: z.enum(['pending', 'approved', 'rejected']).default('pending'),
-});
-
-adminRouter.get('/associations', async (req, res) => {
-  const filters = associationFilters.parse(req.query);
-  const rows = await query(
-    `SELECT a.*, u.name AS user_name, u.email, u.phone
-     FROM associations a JOIN users u ON u.id = a.user_id
-     WHERE a.status = ? ORDER BY a.created_at ASC LIMIT ? OFFSET ?`,
-    [filters.status, filters.limit, filters.offset],
-  );
-  res.json(rows);
-});
-
-adminRouter.patch('/associations/:id/review', async (req, res) => {
-  const { id: associationId } = idParam.parse(req.params);
-  const { decision, reason: motive } = decisionSchema.parse(req.body);
-
-  const [association] = await query('SELECT * FROM associations WHERE id = ?', [
-    associationId,
-  ]);
-  if (!association) throw notFound('Association');
-
-  await query(
-    `UPDATE associations SET status = ?, review_reason = ?, reviewed_by = ?, reviewed_at = NOW()
-     WHERE id = ?`,
-    [decision === 'approve' ? 'approved' : 'rejected', motive ?? null, req.user.id, associationId],
-  );
-  await notify(pool, association.user_id, {
-    type: 'association_review',
-    title: decision === 'approve' ? 'Association validée' : 'Association refusée',
-    body:
-      decision === 'approve'
-        ? `« ${association.name} » est validée : vous pouvez réserver des offres.`
-        : `« ${association.name} » n’a pas été validée : ${motive}`,
-  });
-
-  const [updated] = await query('SELECT * FROM associations WHERE id = ?', [associationId]);
-  res.json(updated);
-});
-
 // ---------- Catégories ----------
 
 const categorySchema = z.object({
@@ -396,6 +553,16 @@ adminRouter.delete('/factors/:id', async (req, res) => {
   firestoreMirror.deleted('impact_factors', [factorId]);
   if (result.affectedRows === 0) throw notFound('Facteur');
   res.status(204).end();
+});
+
+// ---------- Paramètres ----------
+
+adminRouter.get('/settings', async (req, res) => {
+  res.json(await loadSettings());
+});
+
+adminRouter.put('/settings', async (req, res) => {
+  res.json(await saveSettings(settingsSchema.parse(req.body)));
 });
 
 // ---------- Tâches planifiées ----------

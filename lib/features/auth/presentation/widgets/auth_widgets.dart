@@ -194,24 +194,39 @@ class FieldSpan extends StatelessWidget {
   Widget build(BuildContext context) => child;
 }
 
-/// Champ mot de passe avec bouton afficher / masquer.
+/// Champ mot de passe avec boutons effacer (dès qu'il est rempli) et
+/// afficher / masquer.
 class PasswordField extends StatefulWidget {
   const PasswordField({
     super.key,
     required this.controller,
     this.hint = 'Votre mot de passe',
+    this.label,
+    this.helper,
     this.validator,
     this.textInputAction,
     this.onSubmitted,
+    this.onChanged,
     this.autofillHints,
+    this.fieldKey,
+    this.focusNode,
   });
 
   final TextEditingController controller;
   final String hint;
+
+  /// Libellé et aide dans le champ (quand il n'est pas dans un LabeledField).
+  final String? label;
+  final String? helper;
   final FormFieldValidator<String>? validator;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
+  final ValueChanged<String>? onChanged;
   final Iterable<String>? autofillHints;
+
+  /// Pour revalider ce champ depuis un autre (confirmation du mot de passe).
+  final GlobalKey<FormFieldState<String>>? fieldKey;
+  final FocusNode? focusNode;
 
   @override
   State<PasswordField> createState() => _PasswordFieldState();
@@ -219,28 +234,160 @@ class PasswordField extends StatefulWidget {
 
 class _PasswordFieldState extends State<PasswordField> {
   var _obscure = true;
+  FocusNode? _ownFocus;
+
+  FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
+
+  @override
+  void dispose() {
+    _ownFocus?.dispose();
+    super.dispose();
+  }
+
+  /// Vide le champ et y replace le curseur ; prévient comme une saisie
+  /// (revalidation de la confirmation…).
+  void _clear() {
+    widget.controller.clear();
+    widget.onChanged?.call('');
+    _focus.requestFocus();
+  }
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
+      key: widget.fieldKey,
       controller: widget.controller,
+      focusNode: _focus,
       obscureText: _obscure,
       validator: widget.validator,
       textInputAction: widget.textInputAction,
+      onChanged: widget.onChanged,
       onFieldSubmitted: widget.onSubmitted,
       autofillHints: widget.autofillHints,
       decoration: InputDecoration(
         hintText: widget.hint,
-        suffixIcon: IconButton(
-          icon: Icon(
-            _obscure
-                ? Icons.visibility_outlined
-                : Icons.visibility_off_outlined,
-          ),
-          tooltip: _obscure ? 'Afficher' : 'Masquer',
-          onPressed: () => setState(() => _obscure = !_obscure),
+        labelText: widget.label,
+        helperText: widget.helper,
+        helperMaxLines: 2,
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListenableBuilder(
+              listenable: widget.controller,
+              builder: (context, _) => widget.controller.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      tooltip: 'Effacer',
+                      onPressed: _clear,
+                    ),
+            ),
+            IconButton(
+              icon: Icon(
+                _obscure
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+              ),
+              tooltip: _obscure ? 'Afficher' : 'Masquer',
+              onPressed: () => setState(() => _obscure = !_obscure),
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// Confirmation du mot de passe : revérifiée dès que l'un des deux champs
+/// change ; s'ils diffèrent, « Ressaisir le mot de passe » vide les deux
+/// champs et replace le curseur dans [passwordFocus].
+class ConfirmPasswordField extends StatefulWidget {
+  const ConfirmPasswordField({
+    super.key,
+    required this.password,
+    required this.controller,
+    required this.passwordFocus,
+    this.hint = 'Saisissez-le à nouveau',
+    this.onSubmitted,
+  });
+
+  final TextEditingController password;
+  final TextEditingController controller;
+  final FocusNode passwordFocus;
+  final String hint;
+  final ValueChanged<String>? onSubmitted;
+
+  @override
+  State<ConfirmPasswordField> createState() => _ConfirmPasswordFieldState();
+}
+
+class _ConfirmPasswordFieldState extends State<ConfirmPasswordField> {
+  final _field = GlobalKey<FormFieldState<String>>();
+  var _mismatch = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.password.addListener(_passwordChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.password.removeListener(_passwordChanged);
+    super.dispose();
+  }
+
+  /// Erreur déjà affichée : elle disparaît dès que les deux concordent.
+  void _passwordChanged() {
+    if (_field.currentState?.hasError ?? false) _field.currentState!.validate();
+  }
+
+  String? _validate(String? value) {
+    final mismatch =
+        value != null && value.isNotEmpty && value != widget.password.text;
+    if (mismatch != _mismatch) {
+      // Le validateur tourne pendant la construction : mise à jour après.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _mismatch = mismatch);
+      });
+    }
+    if (value == null || value.isEmpty) return 'Confirmation obligatoire';
+    if (mismatch) return 'Les mots de passe ne correspondent pas';
+    return null;
+  }
+
+  void _retype() {
+    // Pas de reset() : il remettrait la valeur saisie à la création du champ.
+    widget.controller.clear();
+    widget.password.clear();
+    setState(() => _mismatch = false);
+    widget.passwordFocus.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PasswordField(
+          fieldKey: _field,
+          controller: widget.controller,
+          hint: widget.hint,
+          textInputAction: TextInputAction.done,
+          onSubmitted: widget.onSubmitted,
+          validator: _validate,
+        ),
+        if (_mismatch)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _retype,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              label: const Text('Ressaisir le mot de passe'),
+            ),
+          ),
+      ],
     );
   }
 }
